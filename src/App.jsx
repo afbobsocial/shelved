@@ -613,11 +613,14 @@ export default function Shelved() {
       setBooks(res[0]);
       setCurrentUser(res[1]);
       setFavGenres(loadFavs());
-      if (loadJustOnboarded()) {
+      // Pulse For You until the user has rated at least one book
+      var myRatings = (res[0] || []).filter(function(b) {
+        return b.ratings && b.ratings[res[1]] > 0;
+      }).length;
+      if (myRatings === 0) {
         setPulseForYou(true);
-        setJustOnboarded(false);
-        setTimeout(function() { setPulseForYou(false); }, 12000);
       }
+      setJustOnboarded(false);
       setLoading(false);
       var m = window.location.hash.match(/^#book\/(.+)$/);
       if (m) {
@@ -722,6 +725,9 @@ export default function Shelved() {
   async function importBooks(incoming) {
     var byId = new Map(books.map(function(b) { return [b.id, b]; }));
     var added = 0, merged = 0;
+    var newBooks = [];
+
+    // Pass 1: build up the merged list
     for (var ri = 0; ri < incoming.length; ri++) {
       var row = incoming[ri];
       var ex = byId.get(row.id);
@@ -735,9 +741,53 @@ export default function Shelved() {
         if (row.status) nb.readers[currentUser] = row.status;
         if (row.rating > 0) nb.ratings[currentUser] = row.rating;
         byId.set(row.id, nb);
+        newBooks.push(nb);
         added++;
       }
     }
+
+    // Pass 2: fetch genres for new books. Parallel, but throttled in batches of 10.
+    async function fetchGenre(b) {
+      try {
+        if (b.isbn) {
+          var r1 = await fetch("https://openlibrary.org/isbn/" + b.isbn + ".json");
+          if (r1.ok) {
+            var d1 = await r1.json();
+            var g = classifyGenre(d1.subjects);
+            if (g) return g;
+          }
+        }
+        var q = encodeURIComponent((b.title || "") + " " + (b.author || ""));
+        var r2 = await fetch("https://openlibrary.org/search.json?q=" + q + "&limit=1&fields=subject");
+        if (r2.ok) {
+          var d2 = await r2.json();
+          if (d2.docs && d2.docs[0]) {
+            var g2 = classifyGenre(d2.docs[0].subject);
+            if (g2) return g2;
+          }
+        }
+        var r3 = await fetch("https://www.googleapis.com/books/v1/volumes?q=" + q + "&maxResults=1&fields=items(volumeInfo(categories))");
+        if (r3.ok) {
+          var d3 = await r3.json();
+          if (d3.items && d3.items[0] && d3.items[0].volumeInfo) {
+            return classifyGenre(d3.items[0].volumeInfo.categories);
+          }
+        }
+      } catch(e) { /* skip */ }
+      return null;
+    }
+
+    for (var bi = 0; bi < newBooks.length; bi += 10) {
+      var batch = newBooks.slice(bi, bi + 10);
+      var genres = await Promise.all(batch.map(fetchGenre));
+      for (var bj = 0; bj < batch.length; bj++) {
+        if (genres[bj]) {
+          var cur = byId.get(batch[bj].id);
+          if (cur) byId.set(batch[bj].id, Object.assign({}, cur, { genre: genres[bj] }));
+        }
+      }
+    }
+
     var upd = Array.from(byId.values());
     setBooks(upd); await saveBooks(upd);
     return { added: added, merged: merged };
