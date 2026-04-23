@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, memo } from "react";
-import { Search, BookOpen, MessageCircle, Plus, X, Send, Loader2, Bookmark, Check, Trash2, Link2, Upload, Sparkles, Layers, AlignLeft } from "lucide-react";
+import { Search, BookOpen, MessageCircle, Plus, X, Send, Loader2, Bookmark, Check, Trash2, Link2, Upload, Sparkles, Layers, AlignLeft, Wand2 } from "lucide-react";
 import Papa from "papaparse";
 import { createClient } from "@supabase/supabase-js";
 
@@ -66,14 +66,51 @@ function genreForBook(book) {
   return book.genre || null;
 }
 
+// ── Genre classifier ──
+// Maps Open Library subjects and Google Books categories to our GENRES list.
+// Returns the best match or null. Order matters — more specific genres first.
+function classifyGenre(subjects) {
+  if (!subjects || subjects.length === 0) return null;
+  var joined = subjects.join(" ").toLowerCase();
+
+  // Order matters: check specific before general (e.g. "science fiction" before "fiction")
+  var rules = [
+    { match: ["horror", "gothic", "supernatural", "ghost stor"], genre: "Horror" },
+    { match: ["science fiction", "sci-fi", "scifi", "dystopia", "cyberpunk", "space opera"], genre: "Sci-Fi" },
+    { match: ["fantasy", "dragons", "magic", "mythology", "epic fantasy"], genre: "Fantasy" },
+    { match: ["mystery", "detective", "crime", "thriller", "suspense", "noir", "whodunit"], genre: "Mystery" },
+    { match: ["romance", "love stor"], genre: "Romance" },
+    { match: ["children", "juvenile", "young adult", "picture book", " ya "], genre: "Children's/YA" },
+    { match: ["historical fiction", "historical novel"], genre: "Historical Fiction" },
+    { match: ["classic", "literary classic"], genre: "Classics" },
+    { match: ["poetry", "poems", "verse"], genre: "Poetry" },
+    { match: ["drama", "plays", "theater", "theatre"], genre: "Drama" },
+    { match: ["humor", "comedy", "satire"], genre: "Humor" },
+    { match: ["graphic novel", "comics", "manga"], genre: "Graphic Novel" },
+    { match: ["short stor"], genre: "Short Stories" },
+    { match: ["memoir", "autobiography", "essay", "biography"], genre: "Memoir/Essay" },
+    { match: ["history", "historical"], genre: "History" },
+    { match: ["philosophy", "philosoph"], genre: "Philosophy" },
+    { match: ["science", "physics", "biology", "astronom", "chemistry", "mathematics"], genre: "Science" },
+    { match: ["literary fiction", "literature", "fiction"], genre: "Literary Fiction" },
+  ];
+
+  for (var i = 0; i < rules.length; i++) {
+    for (var j = 0; j < rules[i].match.length; j++) {
+      if (joined.indexOf(rules[i].match[j]) !== -1) return rules[i].genre;
+    }
+  }
+  return null;
+}
+
 // ── Search ─────────────────────────────────────────────────────────────────
 
 async function searchBooksDirect(query) {
   const q = encodeURIComponent(query);
   const [olRes, gbRes] = await Promise.allSettled([
-    fetch("https://openlibrary.org/search.json?q=" + q + "&limit=10&fields=key,title,author_name,first_publish_year,cover_i,isbn")
+    fetch("https://openlibrary.org/search.json?q=" + q + "&limit=10&fields=key,title,author_name,first_publish_year,cover_i,isbn,subject")
       .then(function(r) { return r.ok ? r.json() : null; }),
-    fetch("https://www.googleapis.com/books/v1/volumes?q=" + q + "&maxResults=10")
+    fetch("https://www.googleapis.com/books/v1/volumes?q=" + q + "&maxResults=10&fields=items(id,volumeInfo(title,authors,publishedDate,imageLinks,industryIdentifiers,categories))")
       .then(function(r) { return r.ok ? r.json() : null; }),
   ]);
 
@@ -106,6 +143,7 @@ async function searchBooksDirect(query) {
         year: doc.first_publish_year || null,
         coverId: doc.cover_i || null,
         isbn: isbn, googleThumb: null,
+        genre: classifyGenre(doc.subject),
       });
     }
   }
@@ -137,6 +175,7 @@ async function searchBooksDirect(query) {
         title: gtitle, author: gauthor,
         year: isFinite(gyear) ? gyear : null,
         coverId: null, isbn: gisbn, googleThumb: thumb,
+        genre: classifyGenre(info.categories),
       });
     }
   }
@@ -486,7 +525,7 @@ function StarRating({ value, onChange, size, allowHalf, readOnly }) {
 
 // ── Storage ────────────────────────────────────────────────────────────────
 
-var SKEYS = { user: "shelved:currentUser" };
+var SKEYS = { user: "shelved:currentUser", favs: "shelved:favGenres", justOnboarded: "shelved:justOnboarded" };
 
 // Shared library lives in Supabase. Each book is a row.
 // Username stays in localStorage (just identifies "you" within the shared library).
@@ -522,6 +561,21 @@ async function loadUser() {
 }
 async function saveUser(name) { try { localStorage.setItem(SKEYS.user, name); } catch(e) {} }
 
+function loadFavs() {
+  try { var v = localStorage.getItem(SKEYS.favs); return v ? JSON.parse(v) : []; } catch(e) { return []; }
+}
+function saveFavs(favs) { try { localStorage.setItem(SKEYS.favs, JSON.stringify(favs)); } catch(e) {} }
+
+function loadJustOnboarded() {
+  try { return localStorage.getItem(SKEYS.justOnboarded) === "1"; } catch(e) { return false; }
+}
+function setJustOnboarded(flag) {
+  try {
+    if (flag) localStorage.setItem(SKEYS.justOnboarded, "1");
+    else localStorage.removeItem(SKEYS.justOnboarded);
+  } catch(e) {}
+}
+
 // ── Backdrop ───────────────────────────────────────────────────────────────
 
 function GradientBackdrop() {
@@ -550,11 +604,20 @@ export default function Shelved() {
   var filterArr = useState("all"); var filter = filterArr[0]; var setFilter = filterArr[1];
   var genreFilterArr = useState(null); var genreFilter = genreFilterArr[0]; var setGenreFilter = genreFilterArr[1];
   var viewArr = useState("spines"); var view = viewArr[0]; var setView = viewArr[1];
+  var favArr = useState([]); var favGenres = favArr[0]; var setFavGenres = favArr[1];
+  var onboardStepArr = useState("name"); var onboardStep = onboardStepArr[0]; var setOnboardStep = onboardStepArr[1];
+  var pulseArr = useState(false); var pulseForYou = pulseArr[0]; var setPulseForYou = pulseArr[1];
 
   useEffect(function() {
     Promise.all([loadBooks(), loadUser()]).then(function(res) {
       setBooks(res[0]);
       setCurrentUser(res[1]);
+      setFavGenres(loadFavs());
+      if (loadJustOnboarded()) {
+        setPulseForYou(true);
+        setJustOnboarded(false);
+        setTimeout(function() { setPulseForYou(false); }, 12000);
+      }
       setLoading(false);
       var m = window.location.hash.match(/^#book\/(.+)$/);
       if (m) {
@@ -575,8 +638,69 @@ export default function Shelved() {
 
   async function handleSetName() {
     if (!nameInput.trim()) return;
-    await saveUser(nameInput.trim());
-    setCurrentUser(nameInput.trim());
+    setOnboardStep("genres");
+  }
+
+  async function finishOnboarding(selectedFavs) {
+    var name = nameInput.trim();
+    if (!name) return;
+    saveFavs(selectedFavs || []);
+    setFavGenres(selectedFavs || []);
+    setJustOnboarded(true);
+    await saveUser(name);
+    setCurrentUser(name);
+  }
+
+
+  async function backfillGenres() {
+    var untagged = books.filter(function(b) { return !b.genre; });
+    if (untagged.length === 0) return { updated: 0 };
+    var updated = 0;
+    var working = books.slice();
+    for (var i = 0; i < untagged.length; i++) {
+      var b = untagged[i];
+      var subjects = null;
+      try {
+        if (b.isbn) {
+          var olRes = await fetch("https://openlibrary.org/isbn/" + b.isbn + ".json");
+          if (olRes.ok) {
+            var olData = await olRes.json();
+            subjects = olData.subjects || null;
+          }
+        }
+        if (!subjects) {
+          var q = encodeURIComponent((b.title || "") + " " + (b.author || ""));
+          var res = await fetch("https://openlibrary.org/search.json?q=" + q + "&limit=1&fields=subject");
+          if (res.ok) {
+            var data = await res.json();
+            if (data.docs && data.docs[0] && data.docs[0].subject) {
+              subjects = data.docs[0].subject;
+            }
+          }
+        }
+        if (!subjects) {
+          var q2 = encodeURIComponent((b.title || "") + " " + (b.author || ""));
+          var gres = await fetch("https://www.googleapis.com/books/v1/volumes?q=" + q2 + "&maxResults=1&fields=items(volumeInfo(categories))");
+          if (gres.ok) {
+            var gdata = await gres.json();
+            if (gdata.items && gdata.items[0] && gdata.items[0].volumeInfo && gdata.items[0].volumeInfo.categories) {
+              subjects = gdata.items[0].volumeInfo.categories;
+            }
+          }
+        }
+      } catch(e) { /* ignore per-book errors */ }
+      var genre = classifyGenre(subjects);
+      if (genre) {
+        var idx = working.findIndex(function(x) { return x.id === b.id; });
+        if (idx !== -1) {
+          working[idx] = Object.assign({}, working[idx], { genre: genre });
+          updated++;
+        }
+      }
+    }
+    setBooks(working);
+    await saveBooks(working);
+    return { updated: updated, total: untagged.length };
   }
 
   async function addBook(bookData, status, rating) {
@@ -673,13 +797,16 @@ export default function Shelved() {
   };
 
   if (!loading && !currentUser) {
+    if (onboardStep === "genres") {
+      return <GenreOnboarding onSubmit={finishOnboarding} />;
+    }
     return <Onboarding nameInput={nameInput} setNameInput={setNameInput} onSubmit={handleSetName} />;
   }
 
   return (
     <div style={{ minHeight:"100vh", background:BG, fontFamily:FONT_SANS, color:INK, position:"relative", overflowX:"hidden" }}>
       <GradientBackdrop />
-      <Header user={currentUser} bookCount={books.length} onAdd={function() { setShowSearch(true); }} onImport={function() { setShowImport(true); }} onRecs={function() { setShowRecs(true); }} onEditName={function() { setShowNameEdit(true); }} />
+      <Header user={currentUser} bookCount={books.length} untaggedCount={books.filter(function(b) { return !b.genre; }).length} pulseForYou={pulseForYou} onAdd={function() { setShowSearch(true); }} onImport={function() { setShowImport(true); }} onRecs={function() { setShowRecs(true); setPulseForYou(false); }} onEditName={function() { setShowNameEdit(true); }} onBackfill={backfillGenres} />
       <FilterBar filter={filter} setFilter={setFilter} view={view} setView={setView} genreFilter={genreFilter} setGenreFilter={setGenreFilter} genreCounts={genreCounts} counts={counts} />
       {loading ? (
         <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:10, padding:120, color:MUTED, fontSize:13, fontFamily:FONT_MONO }}><Loader2 size={18} className="spin" /><span>Loading</span></div>
@@ -688,11 +815,11 @@ export default function Shelved() {
       ) : view === "stack" ? (
         <StackView books={filteredBooks} onSelect={setSelectedBook} onAdd={function() { setShowSearch(true); }} />
       ) : (
-        <SpineGrid books={filteredBooks} onSelect={setSelectedBook} onAdd={function() { setShowSearch(true); }} grouped={!genreFilter && filter === "all"} />
+        <SpineGrid books={filteredBooks} onSelect={setSelectedBook} onAdd={function() { setShowSearch(true); }} />
       )}
       {showSearch && <SearchOverlay onClose={function() { setShowSearch(false); }} onAdd={async function(bd, st, rt) { await addBook(bd, st, rt); setShowSearch(false); }} existingIds={new Set(books.map(function(b) { return b.id; }))} />}
       {showImport && <ImportModal onClose={function() { setShowImport(false); }} onImport={importBooks} />}
-      {showRecs && <RecsModal books={books} currentUser={currentUser} onClose={function() { setShowRecs(false); }} onSelect={function(bk) { setShowRecs(false); setSelectedBook(bk); }} />}
+      {showRecs && <RecsModal books={books} currentUser={currentUser} favGenres={favGenres} onClose={function() { setShowRecs(false); }} onSelect={function(bk) { setShowRecs(false); setSelectedBook(bk); }} />}
       {showNameEdit && <NameEditModal currentName={currentUser} onClose={function() { setShowNameEdit(false); }} onSave={async function(n) { await renameUser(n); setShowNameEdit(false); }} />}
       {selectedBook && <BookDetail book={selectedBook} currentUser={currentUser} onClose={function() { setSelectedBook(null); }} onUpdate={updateBook} onRemove={removeBook} />}
       <style>{GLOBAL_CSS}</style>
@@ -721,12 +848,88 @@ function Onboarding({ nameInput, setNameInput, onSubmit }) {
   );
 }
 
+
+
+function GenreOnboarding({ onSubmit }) {
+  var selArr = useState([]); var selected = selArr[0]; var setSelected = selArr[1];
+
+  function toggle(g) {
+    if (selected.indexOf(g) !== -1) {
+      setSelected(selected.filter(function(x) { return x !== g; }));
+    } else if (selected.length < 3) {
+      setSelected(selected.concat([g]));
+    }
+  }
+
+  return (
+    <div style={{ minHeight:"100vh", background:BG, display:"flex", alignItems:"center", justifyContent:"center", padding:"32px 20px", fontFamily:FONT_SANS }}>
+      <div style={{ maxWidth:640, width:"100%", textAlign:"center" }}>
+        <div style={{ fontSize:24, color:"#E63946", marginBottom:16, fontFamily:FONT_SERIF }}>✦</div>
+        <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(36px,7vw,64px)", fontWeight:400, letterSpacing:"-0.035em", lineHeight:1.0, margin:"0 0 14px" }}>
+          What do you <em>love</em> to read?
+        </h1>
+        <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(14px,2.4vw,17px)", fontStyle:"italic", color:MUTED, margin:"0 0 32px", fontWeight:400 }}>
+          Pick up to three. We'll use this to tune your recommendations.
+        </p>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:8, justifyContent:"center", marginBottom:36 }}>
+          {GENRES.filter(function(g) { return g !== "Other"; }).map(function(g) {
+            var active = selected.indexOf(g) !== -1;
+            var disabled = !active && selected.length >= 3;
+            return (
+              <button key={g}
+                onClick={function() { toggle(g); }}
+                disabled={disabled}
+                style={{
+                  padding:"10px 18px",
+                  background: active ? INK : "transparent",
+                  color: active ? BG : (disabled ? RULE : INK),
+                  border: "1px solid " + (active ? INK : (disabled ? RULE_SOFT : RULE)),
+                  borderRadius: 999,
+                  fontSize: 14,
+                  cursor: disabled ? "default" : "pointer",
+                  fontFamily: FONT_SANS,
+                  fontWeight: 500,
+                  opacity: disabled ? 0.5 : 1,
+                  transition: "all 0.15s ease",
+                }}>
+                {active && "✓ "}{g}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap" }}>
+          <button style={{ padding:"14px 24px", background:"transparent", color:MUTED, border:"1px solid "+RULE_SOFT, borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }}
+            onClick={function() { onSubmit([]); }}>
+            Skip for now
+          </button>
+          <button style={{ padding:"14px 28px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500, opacity:selected.length===0?0.5:1 }}
+            disabled={selected.length === 0}
+            onClick={function() { onSubmit(selected); }}>
+            {selected.length === 0 ? "Pick at least one" : "Continue →"}
+          </button>
+        </div>
+      </div>
+      <style>{GLOBAL_CSS}</style>
+    </div>
+  );
+}
+
 // ── Header ─────────────────────────────────────────────────────────────────
 
-function Header({ user, bookCount, onAdd, onImport, onRecs, onEditName }) {
+function Header({ user, bookCount, untaggedCount, pulseForYou, onAdd, onImport, onRecs, onEditName, onBackfill }) {
+  var backArr = useState("idle"); var backState = backArr[0]; var setBackState = backArr[1];
+  var resArr = useState(null); var backResult = resArr[0]; var setBackResult = resArr[1];
+  async function doBackfill() {
+    setBackState("running");
+    try {
+      var r = await onBackfill();
+      setBackResult(r); setBackState("done");
+      setTimeout(function() { setBackState("idle"); setBackResult(null); }, 3000);
+    } catch(e) { setBackState("idle"); }
+  }
   return (
-    <header style={{ padding:"32px 48px 48px", borderBottom:"1px solid "+RULE, position:"relative", zIndex:1 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:64 }}>
+    <header style={{ padding:"24px clamp(16px, 4vw, 48px) 36px", borderBottom:"1px solid "+RULE, position:"relative", zIndex:1 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"clamp(28px, 6vw, 64px)", gap:16, flexWrap:"wrap" }}>
         <div style={{ display:"flex", alignItems:"baseline", gap:16 }}>
           <span style={{ fontFamily:FONT_DISPLAY, fontSize:22, fontWeight:500, letterSpacing:"-0.02em" }}>
             Shelved<span style={{ color:"#E63946" }}>.</span>
@@ -745,7 +948,7 @@ function Header({ user, bookCount, onAdd, onImport, onRecs, onEditName }) {
           </button>
         </div>
       </div>
-      <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(48px,7vw,96px)", fontWeight:400, lineHeight:1.0, letterSpacing:"-0.035em", margin:"0 0 40px", textAlign:"left" }}>
+      <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(36px,7vw,96px)", fontWeight:400, lineHeight:1.05, letterSpacing:"-0.035em", margin:"0 0 32px", textAlign:"left" }}>
         A library, <em>shared</em>.<br />Everything we've read, <em>together</em>.
       </h1>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:16, paddingTop:32, borderTop:"1px solid "+RULE_SOFT }}>
@@ -758,9 +961,20 @@ function Header({ user, bookCount, onAdd, onImport, onRecs, onEditName }) {
             Rate a few books and we'll find what your circle loved that you haven't read yet.
           </p>
         </div>
-        <button style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 22px", background:"#E63946", color:"#FBF6EA", border:"none", borderRadius:999, fontSize:14, fontWeight:600, cursor:"pointer", fontFamily:FONT_SANS, flexShrink:0, boxShadow:"0 3px 12px rgba(230,57,70,0.28)" }} onClick={onRecs}>
-          <Sparkles size={14} strokeWidth={2} /> Get recommendations
-        </button>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          {untaggedCount > 0 && (
+            <button title={"Tag " + untaggedCount + " books with genres"}
+              disabled={backState==="running"}
+              style={{ display:"flex", alignItems:"center", gap:6, padding:"12px 18px", background:"transparent", color:INK, border:"1px solid "+RULE, borderRadius:999, fontSize:13, fontWeight:500, cursor:backState==="running"?"default":"pointer", fontFamily:FONT_SANS, flexShrink:0, opacity:backState==="running"?0.6:1 }}
+              onClick={doBackfill}>
+              {backState==="running" ? <Loader2 size={14} className="spin" /> : backState==="done" ? <Check size={14} strokeWidth={2.2} /> : <Wand2 size={14} strokeWidth={2} />}
+              {backState==="running" ? "Tagging..." : backState==="done" ? (backResult ? "Tagged " + backResult.updated : "Done") : "Tag genres (" + untaggedCount + ")"}
+            </button>
+          )}
+          <button className={pulseForYou ? "forYouPulse" : ""} style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 22px", background:"#E63946", color:"#FBF6EA", border:"none", borderRadius:999, fontSize:14, fontWeight:600, cursor:"pointer", fontFamily:FONT_SANS, flexShrink:0, boxShadow:"0 3px 12px rgba(230,57,70,0.28)" }} onClick={onRecs}>
+            <Sparkles size={14} strokeWidth={2} /> Get recommendations
+          </button>
+        </div>
       </div>
     </header>
   );
@@ -769,8 +983,6 @@ function Header({ user, bookCount, onAdd, onImport, onRecs, onEditName }) {
 // ── Filter Bar ─────────────────────────────────────────────────────────────
 
 function FilterBar({ filter, setFilter, view, setView, counts, genreFilter, setGenreFilter, genreCounts }) {
-  var openArr = useState(false); var genreOpen = openArr[0]; var setGenreOpen = openArr[1];
-  var btnRef = useRef(null);
   var filters = [
     { k:"all", label:"All" }, { k:"mine", label:"Mine" }, { k:"reading", label:"Reading" },
     { k:"read", label:"Finished" }, { k:"want", label:"Wishlist" },
@@ -778,52 +990,20 @@ function FilterBar({ filter, setFilter, view, setView, counts, genreFilter, setG
   var activeGenres = GENRES.filter(function(g) { return (genreCounts[g] || 0) > 0; })
     .sort(function(a,b) { return (genreCounts[b]||0) - (genreCounts[a]||0); });
 
-  useEffect(function() {
-    if (!genreOpen) return;
-    function onDoc(e) { if (btnRef.current && !btnRef.current.contains(e.target)) setGenreOpen(false); }
-    document.addEventListener("mousedown", onDoc);
-    return function() { document.removeEventListener("mousedown", onDoc); };
-  }, [genreOpen]);
-
   return (
     <div style={{ borderBottom:"1px solid "+RULE, position:"relative", zIndex:50 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"20px 48px", gap:24, flexWrap:"wrap" }}>
-        <div style={{ display:"flex", gap:4, flexWrap:"wrap", alignItems:"center" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"16px clamp(16px, 4vw, 48px) 10px", gap:16, flexWrap:"nowrap" }}>
+        <div className="chipScroll" style={{ display:"flex", gap:4, alignItems:"center", overflowX:"auto", flex:1, minWidth:0 }}>
           {filters.map(function(f) {
             var active = filter === f.k;
             return (
-              <button key={f.k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 14px", background:active?INK:"transparent", color:active?BG:MUTED, border:"none", borderRadius:999, fontSize:13, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={function() { setFilter(f.k); }}>
+              <button key={f.k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 14px", background:active?INK:"transparent", color:active?BG:MUTED, border:"none", borderRadius:999, fontSize:13, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500, flexShrink:0 }} onClick={function() { setFilter(f.k); }}>
                 <span>{f.label}</span><span style={{ fontFamily:FONT_MONO, fontSize:10, opacity:0.6 }}>{counts[f.k]}</span>
               </button>
             );
           })}
-          {activeGenres.length > 0 && (
-            <div ref={btnRef} style={{ position:"relative" }}>
-              <button style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 14px", background:genreFilter?INK:"transparent", color:genreFilter?BG:MUTED, border:"none", borderRadius:999, fontSize:13, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={function() { setGenreOpen(function(v) { return !v; }); }}>
-                <span>{genreFilter || "Genre"}</span>
-                <svg width="8" height="8" viewBox="0 0 8 8" style={{ transform:genreOpen?"rotate(180deg)":"none", transition:"transform 0.2s" }}>
-                  <path d="M1 2 L4 6 L7 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-              {genreOpen && (
-                <div style={{ position:"absolute", top:"calc(100% + 6px)", left:0, zIndex:500, minWidth:220, maxHeight:360, overflowY:"auto", background:BG, border:"1px solid "+RULE, borderRadius:4, boxShadow:"0 12px 32px rgba(0,0,0,0.18)", padding:6, animation:"dropdownIn 0.18s ease" }}>
-                  <button style={{ display:"flex", justifyContent:"space-between", width:"100%", padding:"8px 12px", background:genreFilter===null?INK:"transparent", color:genreFilter===null?BG:INK, border:"none", borderRadius:3, fontSize:13, cursor:"pointer", fontFamily:FONT_SANS, textAlign:"left" }} onClick={function() { setGenreFilter(null); setGenreOpen(false); }}>
-                    All genres
-                  </button>
-                  <div style={{ height:1, background:RULE_SOFT, margin:"4px 0" }} />
-                  {activeGenres.map(function(g) {
-                    return (
-                      <button key={g} style={{ display:"flex", justifyContent:"space-between", width:"100%", padding:"8px 12px", background:genreFilter===g?INK:"transparent", color:genreFilter===g?BG:INK, border:"none", borderRadius:3, fontSize:13, cursor:"pointer", fontFamily:FONT_SANS, textAlign:"left" }} onClick={function() { setGenreFilter(g); setGenreOpen(false); }}>
-                        <span>{g}</span><span style={{ fontFamily:FONT_MONO, fontSize:10, opacity:0.6 }}>{genreCounts[g]}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
         </div>
-        <div style={{ display:"flex", padding:3, background:"rgba(14,14,14,0.06)", borderRadius:999 }}>
+        <div style={{ display:"flex", padding:3, background:"rgba(14,14,14,0.06)", borderRadius:999, flexShrink:0 }}>
           <button title="Spines" style={{ padding:"7px 12px", background:view==="spines"?BG:"transparent", color:view==="spines"?INK:MUTED, border:"none", borderRadius:999, cursor:"pointer", display:"flex", alignItems:"center", boxShadow:view==="spines"?"0 1px 3px rgba(0,0,0,0.08)":"none" }} onClick={function() { setView("spines"); }}>
             <AlignLeft size={15} strokeWidth={2} />
           </button>
@@ -832,6 +1012,21 @@ function FilterBar({ filter, setFilter, view, setView, counts, genreFilter, setG
           </button>
         </div>
       </div>
+      {activeGenres.length > 0 && (
+        <div className="chipScroll" style={{ display:"flex", gap:6, alignItems:"center", overflowX:"auto", padding:"0 clamp(16px, 4vw, 48px) 14px" }}>
+          <button style={{ display:"flex", alignItems:"center", padding:"6px 12px", background:genreFilter===null?INK:"transparent", color:genreFilter===null?BG:MUTED, border:"1px solid "+(genreFilter===null?INK:RULE_SOFT), borderRadius:999, fontSize:12, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500, flexShrink:0 }} onClick={function() { setGenreFilter(null); }}>
+            All genres
+          </button>
+          {activeGenres.map(function(g) {
+            var active = genreFilter === g;
+            return (
+              <button key={g} style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 12px", background:active?INK:"transparent", color:active?BG:MUTED, border:"1px solid "+(active?INK:RULE_SOFT), borderRadius:999, fontSize:12, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500, flexShrink:0, whiteSpace:"nowrap" }} onClick={function() { setGenreFilter(active ? null : g); }}>
+                <span>{g}</span><span style={{ fontFamily:FONT_MONO, fontSize:10, opacity:0.6 }}>{genreCounts[g]}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -852,34 +1047,11 @@ function groupByGenre(books) {
   });
 }
 
-function SpineGrid({ books, onSelect, onAdd, grouped }) {
-  if (!grouped) {
-    return (
-      <div style={{ display:"flex", flexWrap:"wrap", gap:3, padding:"40px 48px 80px", alignItems:"flex-end", position:"relative", zIndex:1 }}>
-        {books.map(function(book, i) { return <Spine key={book.id} book={book} index={i} onSelect={onSelect} />; })}
-        <AddSpine onClick={onAdd} index={books.length} />
-      </div>
-    );
-  }
-  var sections = groupByGenre(books);
+function SpineGrid({ books, onSelect, onAdd }) {
   return (
-    <div style={{ position:"relative", zIndex:1, padding:"32px 0 80px", display:"flex", flexDirection:"column", gap:48 }}>
-      {sections.map(function(sec, si) {
-        return (
-          <section key={sec[0]} style={{ padding:"0 48px", animation:"laneIn 0.6s cubic-bezier(0.2,0.8,0.2,1) both", animationDelay:(si*80)+"ms" }}>
-            <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:16, paddingBottom:10, borderBottom:"1px solid "+RULE_SOFT }}>
-              <h3 style={{ fontFamily:FONT_DISPLAY, fontSize:17, fontWeight:500, margin:0, letterSpacing:"-0.015em" }}>{sec[0]}</h3>
-              <span style={{ fontFamily:FONT_MONO, fontSize:10, color:MUTED, letterSpacing:"0.15em" }}>{String(sec[1].length).padStart(2,"0")}</span>
-            </div>
-            <div style={{ display:"flex", flexWrap:"wrap", gap:3, alignItems:"flex-end" }}>
-              {sec[1].map(function(book, i) { return <Spine key={book.id} book={book} index={si*100+i} onSelect={onSelect} />; })}
-            </div>
-          </section>
-        );
-      })}
-      <div style={{ padding:"20px 48px 0", display:"flex", borderTop:"1px solid "+RULE_SOFT, marginTop:16, paddingTop:32 }}>
-        <AddSpine onClick={onAdd} index={0} />
-      </div>
+    <div style={{ display:"flex", flexWrap:"wrap", gap:3, padding:"40px clamp(16px, 4vw, 48px) 80px", alignItems:"flex-end", position:"relative", zIndex:1 }}>
+      {books.map(function(book, i) { return <Spine key={book.id} book={book} index={i} onSelect={onSelect} />; })}
+      <AddSpine onClick={onAdd} index={books.length} />
     </div>
   );
 }
@@ -957,7 +1129,7 @@ function StackView({ books, onSelect, onAdd }) {
           {toast}
         </div>
       )}
-      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", padding:"60px 48px 100px", gap:3, overflowX:"hidden", animation:trembling?"stackTremble 0.65s ease":"none" }}>
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", padding:"60px clamp(16px, 4vw, 48px) 100px", gap:3, overflowX:"hidden", animation:trembling?"stackTremble 0.65s ease":"none" }}>
         {books.map(function(book, i) {
           var h = hashString(book.id || book.title);
           var rot = ((h % 11) - 5) * 0.7;
@@ -1020,7 +1192,7 @@ function StackBook({ book, rot, xOff, bookH, stagger, onSelect }) {
 function EmptyState({ onAdd, filter }) {
   var msgs = { all:"The library is empty.", mine:"You haven't shelved anything yet.", reading:"Nobody is currently reading.", read:"No finished books yet.", want:"The wishlist is empty." };
   return (
-    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:24, padding:"120px 48px", textAlign:"center", position:"relative", zIndex:1 }}>
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:24, padding:"clamp(60px, 12vw, 120px) clamp(16px, 4vw, 48px)", textAlign:"center", position:"relative", zIndex:1 }}>
       <div style={{ fontFamily:FONT_DISPLAY, fontSize:42, fontStyle:"italic", fontWeight:400, letterSpacing:"-0.025em" }}>{msgs[filter] || msgs.all}</div>
       <button style={{ display:"flex", alignItems:"center", gap:6, padding:"10px 18px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:13, fontWeight:500, cursor:"pointer", fontFamily:FONT_SANS }} onClick={onAdd}>
         <Plus size={14} strokeWidth={2.5} /> Add a book
@@ -1313,12 +1485,15 @@ function ImportModal({ onClose, onImport }) {
 
 // ── Recommendations ────────────────────────────────────────────────────────
 
-function computeRecs(books, currentUser, limit) {
+function computeRecs(books, currentUser, favGenres, limit) {
   limit = limit || 3;
+  favGenres = favGenres || [];
   var myBooks = books.filter(function(b) { return b.readers && b.readers[currentUser]; });
   var myRead  = books.filter(function(b) { return b.readers && b.readers[currentUser] === "read"; });
   var shelvedIds = new Set(myBooks.map(function(b) { return b.id; }));
   var candidates = books.filter(function(b) { return !shelvedIds.has(b.id); });
+
+  // Build taste-twin affinity from user's own ratings
   var genreSum = {}, genreCount = {};
   myRead.forEach(function(b) {
     var g = genreForBook(b), r = b.ratings && b.ratings[currentUser];
@@ -1326,6 +1501,7 @@ function computeRecs(books, currentUser, limit) {
   });
   var genreAffinity = {};
   Object.keys(genreSum).forEach(function(g) { genreAffinity[g] = genreSum[g] / genreCount[g]; });
+
   return candidates.map(function(b) {
     var raters = Object.keys(b.ratings || {}).filter(function(r) { return r !== currentUser; });
     var wSum = 0, wRating = 0;
@@ -1333,16 +1509,30 @@ function computeRecs(books, currentUser, limit) {
     var avg = wSum > 0 ? wRating / wSum : 0;
     if (avg > 0 && avg < 3.5) return null;
     var genre = genreForBook(b);
-    var boost = genre && genreAffinity[genre] ? (genreAffinity[genre]-3)*0.4 : 0;
-    var score = (avg > 0 ? avg : 3.5) + boost;
-    var reason = raters.filter(function(r) { return b.ratings[r] >= 4; })[0];
-    reason = reason ? reason + " rated this " + b.ratings[reason] + "\u2605" : (genre ? "A " + genre.toLowerCase() + " pick" : "On the circle's shelf");
-    return { book:b, score:score, reason:reason };
+    var isFav = genre && favGenres.indexOf(genre) !== -1;
+
+    // Favorite-genre books get a big boost so they surface first
+    var favBoost = isFav ? 1.5 : 0;
+    var affinityBoost = genre && genreAffinity[genre] ? (genreAffinity[genre]-3)*0.4 : 0;
+    var score = (avg > 0 ? avg : 3.5) + favBoost + affinityBoost;
+
+    var topRater = raters.filter(function(r) { return b.ratings[r] >= 4; })[0];
+    var reason;
+    if (isFav) {
+      reason = "One of your favorites \u2014 " + genre.toLowerCase();
+    } else if (topRater) {
+      reason = topRater + " rated this " + b.ratings[topRater] + "\u2605";
+    } else if (genre) {
+      reason = "A " + genre.toLowerCase() + " pick";
+    } else {
+      reason = "On the circle's shelf";
+    }
+    return { book:b, score:score, reason:reason, isFav:isFav };
   }).filter(Boolean).sort(function(a,b) { return b.score-a.score; }).slice(0, limit);
 }
 
-function RecsModal({ books, currentUser, onClose, onSelect }) {
-  var recs = computeRecs(books, currentUser);
+function RecsModal({ books, currentUser, favGenres, onClose, onSelect }) {
+  var recs = computeRecs(books, currentUser, favGenres);
   var myRatings = books.filter(function(b) { return b.ratings && b.ratings[currentUser] > 0; }).length;
   var context = myRatings === 0 ? "Rate a few books and these will get smarter." : "Based on your taste and your circle's ratings.";
   return (
@@ -1567,4 +1757,4 @@ function BookDetail({ book, currentUser, onClose, onUpdate, onRemove }) {
 
 // ── Global CSS ─────────────────────────────────────────────────────────────
 
-var GLOBAL_CSS = "@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..600&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');\n* { box-sizing: border-box; }\nbody { margin: 0; -webkit-font-smoothing: antialiased; }\n@keyframes fadeIn { from { opacity:0; } to { opacity:1; } }\n@keyframes spineIn { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:translateY(0); } }\n@keyframes stackSlideIn { from { opacity:0; transform:translateY(32px); } to { opacity:1; } }\n@keyframes stackTremble { 0%,100% { transform:translateX(0); } 10% { transform:translateX(-4px) rotate(-0.6deg); } 20% { transform:translateX(4px) rotate(0.6deg); } 35% { transform:translateX(-3px) rotate(-0.4deg); } 50% { transform:translateX(3px) rotate(0.4deg); } 65% { transform:translateX(-2px); } 80% { transform:translateX(2px); } }\n@keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(12px) scale(0.93); } to { opacity:1; transform:translateX(-50%) translateY(0) scale(1); } }\n@keyframes resultIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }\n@keyframes laneIn { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }\n@keyframes overlayIn { from { opacity:0; } to { opacity:1; } }\n@keyframes sheetIn { from { transform:translateY(100%); } to { transform:translateY(0); } }\n@keyframes dropdownIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }\n@keyframes dotBounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }\n.spin { animation:spin 1s linear infinite; }\n@keyframes spin { to { transform:rotate(360deg); } }\n.blob { position:absolute; border-radius:50%; filter:blur(80px); opacity:0.5; }\n.blob-1 { width:620px; height:620px; background:radial-gradient(circle,#E63946 0%,transparent 70%); top:-10%; left:-10%; animation:drift1 32s ease-in-out infinite; }\n.blob-2 { width:540px; height:540px; background:radial-gradient(circle,#3A86FF 0%,transparent 70%); top:40%; right:-8%; animation:drift2 38s ease-in-out infinite; }\n.blob-3 { width:480px; height:480px; background:radial-gradient(circle,#FCBF49 0%,transparent 70%); bottom:-5%; left:30%; animation:drift3 44s ease-in-out infinite; }\n.blob-4 { width:420px; height:420px; background:radial-gradient(circle,#06A77D 0%,transparent 70%); top:20%; left:45%; animation:drift4 50s ease-in-out infinite; opacity:0.35; }\n@keyframes drift1 { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(80px,60px) scale(1.15);} 66%{transform:translate(40px,120px) scale(0.9);} }\n@keyframes drift2 { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(-70px,80px) scale(0.85);} 66%{transform:translate(-120px,-40px) scale(1.1);} }\n@keyframes drift3 { 0%,100%{transform:translate(0,0) scale(1);} 50%{transform:translate(100px,-80px) scale(1.2);} }\n@keyframes drift4 { 0%,100%{transform:translate(0,0) scale(1);} 25%{transform:translate(-60px,40px) scale(1.1);} 75%{transform:translate(80px,-50px) scale(1.05);} }\n.spine:hover { transform:translateY(-8px) !important; box-shadow:0 18px 40px rgba(0,0,0,0.18) !important; z-index:2; }.spine-picking { animation:spinePick 0.34s cubic-bezier(0.15,0,0.6,1) both !important; transform-origin:bottom center; }@keyframes spinePick { 0%{transform:translateY(0) rotateY(0deg) scale(1);} 35%{transform:translateY(-22px) rotateY(12deg) scale(1.04);} 65%{transform:translateY(-32px) rotateY(-6deg) scale(1.07);} 100%{transform:translateY(-28px) rotateY(0deg) scale(1.06);} }\n.add-spine:hover { border-color:#0E0E0E !important; color:#0E0E0E !important; }\n.searchPrompt:hover { background:#0E0E0E !important; color:#F5F1EA !important; }\n.recCard:hover { background:#F5F1EA !important; border-color:#0E0E0E !important; transform:translateY(-2px); }\n.nameBtn:hover { color:#E63946 !important; border-color:#E63946 !important; }\n.detailIconBtn:hover { background:#0E0E0E !important; color:#F5F1EA !important; }\n.reviewItem:hover .reviewItemDelete { opacity:1 !important; }\n::-webkit-scrollbar { width:10px; } ::-webkit-scrollbar-track { background:transparent; } ::-webkit-scrollbar-thumb { background:rgba(14,14,14,0.15); border-radius:5px; }\nbutton:focus-visible,input:focus-visible,textarea:focus-visible { outline:2px solid #0E0E0E; outline-offset:2px; }\n::selection { background:#E63946; color:#F5F1EA; }\n@media (max-width:820px) { [style*='grid-template-columns: 280px'] { grid-template-columns:1fr !important; } }";
+var GLOBAL_CSS = "@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..600&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');\n* { box-sizing: border-box; }\nbody { margin: 0; -webkit-font-smoothing: antialiased; }\n@keyframes fadeIn { from { opacity:0; } to { opacity:1; } }\n@keyframes spineIn { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:translateY(0); } }\n@keyframes stackSlideIn { from { opacity:0; transform:translateY(32px); } to { opacity:1; } }\n@keyframes stackTremble { 0%,100% { transform:translateX(0); } 10% { transform:translateX(-4px) rotate(-0.6deg); } 20% { transform:translateX(4px) rotate(0.6deg); } 35% { transform:translateX(-3px) rotate(-0.4deg); } 50% { transform:translateX(3px) rotate(0.4deg); } 65% { transform:translateX(-2px); } 80% { transform:translateX(2px); } }\n@keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(12px) scale(0.93); } to { opacity:1; transform:translateX(-50%) translateY(0) scale(1); } }\n@keyframes resultIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }\n@keyframes laneIn { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }\n@keyframes overlayIn { from { opacity:0; } to { opacity:1; } }\n@keyframes sheetIn { from { transform:translateY(100%); } to { transform:translateY(0); } }\n@keyframes dropdownIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }\n@keyframes dotBounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }\n.spin { animation:spin 1s linear infinite; }\n@keyframes spin { to { transform:rotate(360deg); } }\n.blob { position:absolute; border-radius:50%; filter:blur(80px); opacity:0.5; }\n.blob-1 { width:620px; height:620px; background:radial-gradient(circle,#E63946 0%,transparent 70%); top:-10%; left:-10%; animation:drift1 32s ease-in-out infinite; }\n.blob-2 { width:540px; height:540px; background:radial-gradient(circle,#3A86FF 0%,transparent 70%); top:40%; right:-8%; animation:drift2 38s ease-in-out infinite; }\n.blob-3 { width:480px; height:480px; background:radial-gradient(circle,#FCBF49 0%,transparent 70%); bottom:-5%; left:30%; animation:drift3 44s ease-in-out infinite; }\n.blob-4 { width:420px; height:420px; background:radial-gradient(circle,#06A77D 0%,transparent 70%); top:20%; left:45%; animation:drift4 50s ease-in-out infinite; opacity:0.35; }\n@keyframes drift1 { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(80px,60px) scale(1.15);} 66%{transform:translate(40px,120px) scale(0.9);} }\n@keyframes drift2 { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(-70px,80px) scale(0.85);} 66%{transform:translate(-120px,-40px) scale(1.1);} }\n@keyframes drift3 { 0%,100%{transform:translate(0,0) scale(1);} 50%{transform:translate(100px,-80px) scale(1.2);} }\n@keyframes drift4 { 0%,100%{transform:translate(0,0) scale(1);} 25%{transform:translate(-60px,40px) scale(1.1);} 75%{transform:translate(80px,-50px) scale(1.05);} }\n.spine:hover { transform:translateY(-8px) !important; box-shadow:0 18px 40px rgba(0,0,0,0.18) !important; z-index:2; }.spine-picking { animation:spinePick 0.34s cubic-bezier(0.15,0,0.6,1) both !important; transform-origin:bottom center; }@keyframes spinePick { 0%{transform:translateY(0) rotateY(0deg) scale(1);} 35%{transform:translateY(-22px) rotateY(12deg) scale(1.04);} 65%{transform:translateY(-32px) rotateY(-6deg) scale(1.07);} 100%{transform:translateY(-28px) rotateY(0deg) scale(1.06);} }\n.add-spine:hover { border-color:#0E0E0E !important; color:#0E0E0E !important; }\n.searchPrompt:hover { background:#0E0E0E !important; color:#F5F1EA !important; }\n.recCard:hover { background:#F5F1EA !important; border-color:#0E0E0E !important; transform:translateY(-2px); }\n.nameBtn:hover { color:#E63946 !important; border-color:#E63946 !important; }\n.detailIconBtn:hover { background:#0E0E0E !important; color:#F5F1EA !important; }\n.reviewItem:hover .reviewItemDelete { opacity:1 !important; }\n::-webkit-scrollbar { width:10px; } ::-webkit-scrollbar-track { background:transparent; } ::-webkit-scrollbar-thumb { background:rgba(14,14,14,0.15); border-radius:5px; }\nbutton:focus-visible,input:focus-visible,textarea:focus-visible { outline:2px solid #0E0E0E; outline-offset:2px; }\n::selection { background:#E63946; color:#F5F1EA; }\n@media (max-width:820px) { [style*='grid-template-columns: 280px'] { grid-template-columns:1fr !important; } } .chipScroll::-webkit-scrollbar { display: none; } .chipScroll { -ms-overflow-style: none; scrollbar-width: none; } @keyframes forYouPulse { 0%,100% { box-shadow:0 3px 12px rgba(230,57,70,0.28); transform:scale(1); } 50% { box-shadow:0 6px 24px rgba(230,57,70,0.55); transform:scale(1.035); } } .forYouPulse { animation: forYouPulse 2.2s cubic-bezier(0.4,0,0.6,1) infinite; } @media (max-width:600px) { .spine { width: 64px !important; height: 260px !important; } .add-spine { width: 64px !important; height: 260px !important; } .forYouPulse { animation: none; } }";
