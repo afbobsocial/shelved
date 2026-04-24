@@ -66,6 +66,15 @@ function genreForBook(book) {
   return book.genre || null;
 }
 
+// Fetch all users once (for id->name mapping display)
+async function loadAllUsers() {
+  try {
+    var { data, error } = await supabase.from("users").select("id, name");
+    if (error) throw error;
+    return data || [];
+  } catch(e) { console.error("loadAllUsers:", e); return []; }
+}
+
 // ── Genre classifier ──
 // Maps Open Library subjects and Google Books categories to our GENRES list.
 // Returns the best match or null. Order matters — more specific genres first.
@@ -666,6 +675,7 @@ export default function Shelved() {
   var loadingArr = useState(true); var loading = loadingArr[0]; var setLoading = loadingArr[1];
   var userArr = useState(""); var currentUser = userArr[0]; var setCurrentUser = userArr[1];
   var userIdArr = useState(""); var currentUserId = userIdArr[0]; var setCurrentUserId = userIdArr[1];
+  var umArr = useState({}); var userMap = umArr[0]; var setUserMap = umArr[1];
   var nameInputArr = useState(""); var nameInput = nameInputArr[0]; var setNameInput = nameInputArr[1];
   var showSearchArr = useState(false); var showSearch = showSearchArr[0]; var setShowSearch = showSearchArr[1];
   var showImportArr = useState(false); var showImport = showImportArr[0]; var setShowImport = showImportArr[1];
@@ -680,10 +690,13 @@ export default function Shelved() {
   var pulseArr = useState(false); var pulseForYou = pulseArr[0]; var setPulseForYou = pulseArr[1];
 
   useEffect(function() {
-    Promise.all([loadBooks(), loadUser(), loadUserId()]).then(function(res) {
+    Promise.all([loadBooks(), loadUser(), loadUserId(), loadAllUsers()]).then(function(res) {
       setBooks(res[0]);
       setCurrentUser(res[1]);
       setCurrentUserId(res[2]);
+      var map = {};
+      (res[3] || []).forEach(function(u) { map[u.id] = u.name; });
+      setUserMap(map);
       setFavGenres(loadFavs());
       // Pulse For You until the user has rated at least one book
       var myRatings = (res[0] || []).filter(function(b) {
@@ -719,6 +732,7 @@ export default function Shelved() {
     await saveUserId(user.id);
     setCurrentUser(user.name);
     setCurrentUserId(user.id);
+    setUserMap(function(prev) { var next = Object.assign({}, prev); next[user.id] = user.name; return next; });
     setJustOnboarded(true);
     setPulseForYou(true);
 
@@ -966,9 +980,15 @@ export default function Shelved() {
     if (currentUser && b.readers[currentUser]) return true;
     return false;
   }
+  function isMyBook(b) {
+    if (currentUserId && b.addedByUserId === currentUserId) return true;
+    if (currentUser && b.addedBy === currentUser) return true;
+    return false;
+  }
   var filteredBooks = books.filter(function(b) {
     if (filter === "mine" && !userHasRead(b)) return false;
-    if (filter !== "all" && filter !== "mine" && Object.values(b.readers || {}).indexOf(filter) === -1) return false;
+    if (filter === "circle" && isMyBook(b)) return false;
+    if (filter !== "all" && filter !== "mine" && filter !== "circle" && Object.values(b.readers || {}).indexOf(filter) === -1) return false;
     if (genreFilter && genreForBook(b) !== genreFilter) return false;
     return true;
   });
@@ -980,6 +1000,7 @@ export default function Shelved() {
   var counts = {
     all: books.length,
     mine: books.filter(userHasRead).length,
+    circle: books.filter(function(b) { return !isMyBook(b); }).length,
     reading: books.filter(function(b) { return Object.values(b.readers||{}).indexOf("reading") !== -1; }).length,
     read: books.filter(function(b) { return Object.values(b.readers||{}).indexOf("read") !== -1; }).length,
     want: books.filter(function(b) { return Object.values(b.readers||{}).indexOf("want") !== -1; }).length,
@@ -998,6 +1019,8 @@ export default function Shelved() {
         <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:10, padding:120, color:MUTED, fontSize:13, fontFamily:FONT_MONO }}><Loader2 size={18} className="spin" /><span>Loading</span></div>
       ) : filteredBooks.length === 0 ? (
         <EmptyState onAdd={function() { setShowSearch(true); }} filter={filter} />
+      ) : filter === "circle" ? (
+        <CircleView books={filteredBooks} userMap={userMap} onSelect={setSelectedBook} />
       ) : view === "stack" ? (
         <StackView books={filteredBooks} onSelect={setSelectedBook} onAdd={function() { setShowSearch(true); }} />
       ) : (
@@ -1007,7 +1030,7 @@ export default function Shelved() {
       {showImport && <ImportModal onClose={function() { setShowImport(false); }} onImport={importBooks} />}
       {showRecs && <RecsModal books={books} currentUser={currentUser} favGenres={favGenres} onClose={function() { setShowRecs(false); }} onSelect={function(bk) { setShowRecs(false); setSelectedBook(bk); }} />}
       {showNameEdit && <NameEditModal currentName={currentUser} onClose={function() { setShowNameEdit(false); }} onSave={async function(n) { await renameUser(n); setShowNameEdit(false); }} />}
-      {selectedBook && <BookDetail book={selectedBook} currentUser={currentUser} onClose={function() { setSelectedBook(null); }} onUpdate={updateBook} onRemove={removeBook} />}
+      {selectedBook && <BookDetail book={selectedBook} currentUser={currentUser} currentUserId={currentUserId} userMap={userMap} onClose={function() { setSelectedBook(null); }} onUpdate={updateBook} onRemove={removeBook} />}
       <style>{GLOBAL_CSS}</style>
     </div>
   );
@@ -1083,7 +1106,7 @@ function AuthFlow({ onAuthed }) {
           <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(16px,2.5vw,20px)", fontStyle:"italic", color:MUTED, margin:"0 0 40px 0", fontWeight:400 }}>A private library for a closed circle of readers.</p>
           <div style={{ display:"flex", gap:10, flexDirection:"column", maxWidth:320, margin:"0 auto" }}>
             <button style={{ padding:"14px 24px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={function() { setMode("signup-name"); setError(""); }}>
-              I'm new here
+              I\'m new here
             </button>
             <button style={{ padding:"14px 24px", background:"transparent", color:INK, border:"1px solid "+RULE, borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={function() { setMode("signin"); setError(""); }}>
               I already have an account
@@ -1388,8 +1411,8 @@ function Header({ user, bookCount, untaggedCount, pulseForYou, onAdd, onImport, 
 
 function FilterBar({ filter, setFilter, view, setView, counts, genreFilter, setGenreFilter, genreCounts }) {
   var filters = [
-    { k:"all", label:"All" }, { k:"mine", label:"Mine" }, { k:"reading", label:"Reading" },
-    { k:"read", label:"Finished" }, { k:"want", label:"Wishlist" },
+    { k:"all", label:"All" }, { k:"mine", label:"Mine" }, { k:"circle", label:"Circle" },
+    { k:"reading", label:"Reading" }, { k:"read", label:"Finished" }, { k:"want", label:"Wishlist" },
   ];
   var activeGenres = GENRES.filter(function(g) { return (genreCounts[g] || 0) > 0; })
     .sort(function(a,b) { return (genreCounts[b]||0) - (genreCounts[a]||0); });
@@ -1431,6 +1454,110 @@ function FilterBar({ filter, setFilter, view, setView, counts, genreFilter, setG
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Circle View ────────────────────────────────────────────────────────────
+// Group by `addedBy` name. For each member, show their books as fanned cards.
+
+function CircleView({ books, userMap, onSelect }) {
+  // Group books by addedBy
+  var groups = {};
+  books.forEach(function(b) {
+    var by = b.addedBy || "Unknown";
+    if (!groups[by]) groups[by] = [];
+    groups[by].push(b);
+  });
+  var members = Object.keys(groups).sort(function(a,b) {
+    return groups[b].length - groups[a].length;
+  });
+
+  if (members.length === 0) {
+    return (
+      <div style={{ padding:"clamp(60px, 12vw, 120px) clamp(16px, 4vw, 48px)", textAlign:"center", position:"relative", zIndex:1 }}>
+        <div style={{ fontFamily:FONT_DISPLAY, fontSize:32, fontStyle:"italic", color:MUTED }}>
+          No one else has added books yet.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position:"relative", zIndex:1, padding:"32px 0 100px", display:"flex", flexDirection:"column", gap:48 }}>
+      {members.map(function(member, mi) {
+        var memberBooks = groups[member];
+        return (
+          <section key={member} style={{ padding:"0 clamp(16px, 4vw, 48px)", animation:"laneIn 0.6s cubic-bezier(0.2,0.8,0.2,1) both", animationDelay:(mi*80)+"ms" }}>
+            <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:20, paddingBottom:10, borderBottom:"1px solid "+RULE_SOFT }}>
+              <h3 style={{ fontFamily:FONT_DISPLAY, fontSize:22, fontWeight:500, margin:0, letterSpacing:"-0.02em" }}>{member}</h3>
+              <span style={{ fontFamily:FONT_MONO, fontSize:10, color:MUTED, letterSpacing:"0.15em" }}>{String(memberBooks.length).padStart(2,"0")} {memberBooks.length===1?"book":"books"}</span>
+            </div>
+            <FannedHand books={memberBooks} onSelect={onSelect} />
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function FannedHand({ books, onSelect }) {
+  // Each card overlaps the previous by ~55-65%. Rotate subtly for hand-of-cards effect.
+  // Hovering brings a card forward and lifts it. Click opens detail.
+  var hoverArr = useState(-1); var hovered = hoverArr[0]; var setHovered = hoverArr[1];
+
+  var cardW = 120; // base width
+  var cardH = 180;
+  var overlap = 80; // how many pixels of each card is visible
+  var rowHeight = cardH + 40;
+
+  return (
+    <div style={{
+      position:"relative",
+      height: rowHeight,
+      overflowX: "auto",
+      overflowY: "visible",
+      paddingTop: 20,
+    }} className="chipScroll">
+      <div style={{
+        position:"relative",
+        height: cardH,
+        width: Math.max(books.length * overlap + (cardW - overlap) + 40, 100),
+        display: "block",
+      }}>
+        {books.map(function(book, i) {
+          var rot = ((i % 7) - 3) * 1.5; // subtle rotation per card
+          var isHover = hovered === i;
+          var z = isHover ? 100 : i;
+          var lift = isHover ? -16 : 0;
+          return (
+            <button key={book.id}
+              onClick={function() { onSelect(book); }}
+              onMouseEnter={function() { setHovered(i); }}
+              onMouseLeave={function() { setHovered(-1); }}
+              style={{
+                position:"absolute",
+                left: i * overlap,
+                top: 0,
+                width: cardW,
+                height: cardH,
+                background: spineColorFor(book),
+                border: "none",
+                borderRadius: 4,
+                padding: 0,
+                cursor: "pointer",
+                overflow: "hidden",
+                transform: "rotate(" + (isHover ? 0 : rot) + "deg) translateY(" + lift + "px) scale(" + (isHover ? 1.05 : 1) + ")",
+                transformOrigin: "bottom center",
+                transition: "transform 0.28s cubic-bezier(0.2,0.8,0.2,1), box-shadow 0.28s ease",
+                boxShadow: isHover ? "0 20px 40px rgba(0,0,0,0.3)" : "0 4px 12px rgba(0,0,0,0.12)",
+                zIndex: z,
+              }}>
+              <CoverImage book={book} showMetaOnFallback={true} />
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -2025,7 +2152,12 @@ function GenreEditor({ currentGenre, onChange }) {
   );
 }
 
-function BookDetail({ book, currentUser, onClose, onUpdate, onRemove }) {
+function BookDetail({ book, currentUser, currentUserId, userMap, onClose, onUpdate, onRemove }) {
+  function displayNameFor(key) {
+    // key can be a UUID or a name string (legacy). userMap maps UUID -> name.
+    if (userMap && userMap[key]) return userMap[key];
+    return key;
+  }
   var reviewArr = useState(""); var reviewText = reviewArr[0]; var setReviewText = reviewArr[1];
   var shareArr = useState(null); var shareStatus = shareArr[0]; var setShareStatus = shareArr[1];
   var myStatus = book.readers && book.readers[currentUser];
@@ -2098,16 +2230,18 @@ function BookDetail({ book, currentUser, onClose, onUpdate, onRemove }) {
             <h2 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(36px,4vw,52px)", fontWeight:400, margin:"0 0 8px", lineHeight:1.0, letterSpacing:"-0.035em" }}>{book.title}</h2>
             <div style={{ fontFamily:FONT_SERIF, fontSize:20, fontStyle:"italic", color:MUTED, marginBottom:6 }}>{book.author}</div>
             {book.year && <div style={{ fontFamily:FONT_MONO, fontSize:11, color:MUTED, letterSpacing:"0.1em" }}>Published {book.year}</div>}
+            {book.addedBy && <div style={{ fontFamily:FONT_SERIF, fontSize:13, fontStyle:"italic", color:MUTED, marginTop:8 }}>Added by {book.addedBy}</div>}
             <GenreEditor currentGenre={genreForBook(book)} onChange={async function(g) { await onUpdate(book.id, function(b) { return Object.assign({},b,{genre:g||null}); }); }} />
             {readerList.length > 0 && (
               <div style={{ marginTop:36, paddingTop:24, borderTop:"1px solid "+RULE }}>
                 <div style={{ fontFamily:FONT_MONO, fontSize:10, color:MUTED, letterSpacing:"0.15em", marginBottom:12 }}>THE CIRCLE</div>
                 <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
                   {readerList.map(function(entry) {
-                    var name = entry[0]; var status = entry[1];
-                    var tr = book.ratings && book.ratings[name];
+                    var key = entry[0]; var status = entry[1];
+                    var name = displayNameFor(key);
+                    var tr = book.ratings && book.ratings[key];
                     return (
-                      <div key={name} style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 0", fontFamily:FONT_SERIF }}>
+                      <div key={key} style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 0", fontFamily:FONT_SERIF }}>
                         <span style={{ fontSize:16, fontWeight:500 }}>{name}</span>
                         <span style={{ color:MUTED }}>&middot;</span>
                         <span style={{ fontSize:14, fontStyle:"italic", color:MUTED }}>{(STATUSES[status] && STATUSES[status].label) || status}</span>
