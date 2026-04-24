@@ -1019,10 +1019,10 @@ export default function Shelved() {
         <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:10, padding:120, color:MUTED, fontSize:13, fontFamily:FONT_MONO }}><Loader2 size={18} className="spin" /><span>Loading</span></div>
       ) : filteredBooks.length === 0 ? (
         <EmptyState onAdd={function() { setShowSearch(true); }} filter={filter} />
-      ) : filter === "circle" ? (
-        <CircleView books={filteredBooks} userMap={userMap} onSelect={setSelectedBook} />
       ) : view === "stack" ? (
         <StackView books={filteredBooks} onSelect={setSelectedBook} onAdd={function() { setShowSearch(true); }} />
+      ) : filter === "circle" ? (
+        <CircleView books={filteredBooks} userMap={userMap} onSelect={setSelectedBook} />
       ) : (
         <SpineGrid books={filteredBooks} onSelect={setSelectedBook} onAdd={function() { setShowSearch(true); }} />
       )}
