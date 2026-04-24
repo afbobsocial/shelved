@@ -1083,7 +1083,7 @@ function AuthFlow({ onAuthed }) {
           <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(16px,2.5vw,20px)", fontStyle:"italic", color:MUTED, margin:"0 0 40px 0", fontWeight:400 }}>A private library for a closed circle of readers.</p>
           <div style={{ display:"flex", gap:10, flexDirection:"column", maxWidth:320, margin:"0 auto" }}>
             <button style={{ padding:"14px 24px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={function() { setMode("signup-name"); setError(""); }}>
-              I\'m new here
+              I'm new here
             </button>
             <button style={{ padding:"14px 24px", background:"transparent", color:INK, border:"1px solid "+RULE, borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={function() { setMode("signin"); setError(""); }}>
               I already have an account
