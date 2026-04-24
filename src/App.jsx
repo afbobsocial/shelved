@@ -575,7 +575,7 @@ async function loadUserId() {
 }
 async function saveUserId(id) { try { localStorage.setItem(SKEYS.userId, id); } catch(e) {} }
 
-// Hash a PIN with a fixed app salt so identical PINs don\'t collide in storage.
+// Hash a PIN with a fixed app salt so identical PINs don't collide in storage.
 // Uses Web Crypto (available in all modern browsers).
 async function hashPin(pin) {
   var encoder = new TextEncoder();
@@ -737,7 +737,7 @@ export default function Shelved() {
     setPulseForYou(true);
 
     // Auto-claim: migrate any old string-keyed ratings/readers from books
-    // where the old key matches this user\'s name. One-time per fresh login.
+    // where the old key matches this user's name. One-time per fresh login.
     var migrated = false;
     var newBooks = books.map(function(b) {
       var nb = Object.assign({}, b);
@@ -857,13 +857,13 @@ export default function Shelved() {
       }
     }
 
-    // Save immediately — don\'t make the user wait on external APIs.
+    // Save immediately — don't make the user wait on external APIs.
     var upd = Array.from(byId.values());
     setBooks(upd);
     await saveBooks(upd);
 
     // Fire-and-forget background genre enrichment. User can see their library
-    // immediately; genres appear as they\'re classified. Users can also manually
+    // immediately; genres appear as they're classified. Users can also manually
     // tag via the book detail view or "Tag genres" button in header.
     setTimeout(function() { enrichGenresInBackground(newBookIds); }, 100);
 
@@ -1028,7 +1028,7 @@ export default function Shelved() {
       )}
       {showSearch && <SearchOverlay onClose={function() { setShowSearch(false); }} onAdd={async function(bd, st, rt) { await addBook(bd, st, rt); setShowSearch(false); }} existingIds={new Set(books.map(function(b) { return b.id; }))} />}
       {showImport && <ImportModal onClose={function() { setShowImport(false); }} onImport={importBooks} />}
-      {showRecs && <RecsModal books={books} currentUser={currentUser} favGenres={favGenres} onClose={function() { setShowRecs(false); }} onSelect={function(bk) { setShowRecs(false); setSelectedBook(bk); }} />}
+      {showRecs && <RecsModal books={books} currentUser={currentUser} currentUserId={currentUserId} userMap={userMap} favGenres={favGenres} onClose={function() { setShowRecs(false); }} onSelect={function(bk) { setShowRecs(false); setSelectedBook(bk); }} />}
       {showNameEdit && <NameEditModal currentName={currentUser} onClose={function() { setShowNameEdit(false); }} onSave={async function(n) { await renameUser(n); setShowNameEdit(false); }} />}
       {selectedBook && <BookDetail book={selectedBook} currentUser={currentUser} currentUserId={currentUserId} userMap={userMap} onClose={function() { setSelectedBook(null); }} onUpdate={updateBook} onRemove={removeBook} />}
       <style>{GLOBAL_CSS}</style>
@@ -1066,7 +1066,7 @@ function AuthFlow({ onAuthed }) {
     try {
       var existing = await findUserByName(name);
       if (existing) {
-        setError("That name is taken. If it\'s yours, tap Sign in.");
+        setError("That name is taken. If it's yours, tap Sign in.");
         setBusy(false); return;
       }
       setMode("signup-pin");
@@ -1106,7 +1106,7 @@ function AuthFlow({ onAuthed }) {
           <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(16px,2.5vw,20px)", fontStyle:"italic", color:MUTED, margin:"0 0 40px 0", fontWeight:400 }}>A private library for a closed circle of readers.</p>
           <div style={{ display:"flex", gap:10, flexDirection:"column", maxWidth:320, margin:"0 auto" }}>
             <button style={{ padding:"14px 24px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={function() { setMode("signup-name"); setError(""); }}>
-              I\'m new here
+              I'm new here
             </button>
             <button style={{ padding:"14px 24px", background:"transparent", color:INK, border:"1px solid "+RULE, borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={function() { setMode("signin"); setError(""); }}>
               I already have an account
@@ -1185,7 +1185,7 @@ function AuthFlow({ onAuthed }) {
             Choose a <em>4-digit PIN</em>
           </h1>
           <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(14px,2.4vw,17px)", fontStyle:"italic", color:MUTED, margin:"0 0 32px" }}>
-            You\'ll use this to sign in on other devices. Pick something memorable — there\'s no reset.
+            You'll use this to sign in on other devices. Pick something memorable — there's no reset.
           </p>
           <div style={{ display:"flex", flexDirection:"column", gap:10, maxWidth:320, margin:"0 auto" }}>
             <input type="tel" inputMode="numeric" maxLength={4} pattern="[0-9]{4}" style={{ padding:"14px 18px", fontSize:28, letterSpacing:"0.5em", border:"1px solid "+RULE_SOFT, borderRadius:999, background:"transparent", fontFamily:FONT_MONO, color:INK, outline:"none", textAlign:"center" }} placeholder="••••" value={pin} onChange={function(e) { setPin(e.target.value.replace(/[^0-9]/g,"").slice(0,4)); }} onKeyDown={function(e) { if (e.key === "Enter" && pin.length === 4) proceedToGenres(); }} autoFocus />
@@ -1228,7 +1228,7 @@ function GenreOnboardingInner({ onSubmit, busy, error }) {
         What do you <em>love</em> to read?
       </h1>
       <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(14px,2.4vw,17px)", fontStyle:"italic", color:MUTED, margin:"0 0 32px", fontWeight:400 }}>
-        Pick up to three. We\'ll tune your recommendations.
+        Pick up to three. We'll tune your recommendations.
       </p>
       <div style={{ display:"flex", flexWrap:"wrap", gap:8, justifyContent:"center", marginBottom:28 }}>
         {GENRES.filter(function(g) { return g !== "Other"; }).map(function(g) {
@@ -2016,25 +2016,52 @@ function ImportModal({ onClose, onImport }) {
 
 // ── Recommendations ────────────────────────────────────────────────────────
 
-function computeRecs(books, currentUser, favGenres, limit) {
+function computeRecs(books, currentUser, currentUserId, userMap, favGenres, limit) {
   limit = limit || 3;
   favGenres = favGenres || [];
-  var myBooks = books.filter(function(b) { return b.readers && b.readers[currentUser]; });
-  var myRead  = books.filter(function(b) { return b.readers && b.readers[currentUser] === "read"; });
+  userMap = userMap || {};
+
+  // isMine: a book is "mine" if either the UUID key or the legacy name key is set
+  function isMine(b) {
+    if (!b.readers) return false;
+    if (currentUserId && b.readers[currentUserId]) return true;
+    if (currentUser && b.readers[currentUser]) return true;
+    return false;
+  }
+  function myRating(b) {
+    if (!b.ratings) return 0;
+    if (currentUserId && b.ratings[currentUserId]) return b.ratings[currentUserId];
+    if (currentUser && b.ratings[currentUser]) return b.ratings[currentUser];
+    return 0;
+  }
+  function myStatus(b) {
+    if (!b.readers) return null;
+    if (currentUserId && b.readers[currentUserId]) return b.readers[currentUserId];
+    if (currentUser && b.readers[currentUser]) return b.readers[currentUser];
+    return null;
+  }
+  function displayFor(key) { return (userMap && userMap[key]) || key; }
+
+  var myBooks = books.filter(isMine);
+  var myRead  = books.filter(function(b) { return myStatus(b) === "read"; });
   var shelvedIds = new Set(myBooks.map(function(b) { return b.id; }));
   var candidates = books.filter(function(b) { return !shelvedIds.has(b.id); });
 
   // Build taste-twin affinity from user's own ratings
   var genreSum = {}, genreCount = {};
   myRead.forEach(function(b) {
-    var g = genreForBook(b), r = b.ratings && b.ratings[currentUser];
+    var g = genreForBook(b), r = myRating(b);
     if (g && r > 0) { genreSum[g] = (genreSum[g]||0)+r; genreCount[g] = (genreCount[g]||0)+1; }
   });
   var genreAffinity = {};
   Object.keys(genreSum).forEach(function(g) { genreAffinity[g] = genreSum[g] / genreCount[g]; });
 
   return candidates.map(function(b) {
-    var raters = Object.keys(b.ratings || {}).filter(function(r) { return r !== currentUser; });
+    var allRaters = Object.keys(b.ratings || {});
+    // Exclude the current user (by either key)
+    var raters = allRaters.filter(function(r) {
+      return r !== currentUserId && r !== currentUser;
+    });
     var wSum = 0, wRating = 0;
     raters.forEach(function(r) { wSum += 1; wRating += b.ratings[r]; });
     var avg = wSum > 0 ? wRating / wSum : 0;
@@ -2042,7 +2069,6 @@ function computeRecs(books, currentUser, favGenres, limit) {
     var genre = genreForBook(b);
     var isFav = genre && favGenres.indexOf(genre) !== -1;
 
-    // Favorite-genre books get a big boost so they surface first
     var favBoost = isFav ? 1.5 : 0;
     var affinityBoost = genre && genreAffinity[genre] ? (genreAffinity[genre]-3)*0.4 : 0;
     var score = (avg > 0 ? avg : 3.5) + favBoost + affinityBoost;
@@ -2052,7 +2078,7 @@ function computeRecs(books, currentUser, favGenres, limit) {
     if (isFav) {
       reason = "One of your favorites \u2014 " + genre.toLowerCase();
     } else if (topRater) {
-      reason = topRater + " rated this " + b.ratings[topRater] + "\u2605";
+      reason = displayFor(topRater) + " rated this " + b.ratings[topRater] + "\u2605";
     } else if (genre) {
       reason = "A " + genre.toLowerCase() + " pick";
     } else {
@@ -2062,9 +2088,12 @@ function computeRecs(books, currentUser, favGenres, limit) {
   }).filter(Boolean).sort(function(a,b) { return b.score-a.score; }).slice(0, limit);
 }
 
-function RecsModal({ books, currentUser, favGenres, onClose, onSelect }) {
-  var recs = computeRecs(books, currentUser, favGenres);
-  var myRatings = books.filter(function(b) { return b.ratings && b.ratings[currentUser] > 0; }).length;
+function RecsModal({ books, currentUser, currentUserId, userMap, favGenres, onClose, onSelect }) {
+  var recs = computeRecs(books, currentUser, currentUserId, userMap, favGenres);
+  var myRatings = books.filter(function(b) {
+    var r = b.ratings || {};
+    return (currentUserId && r[currentUserId] > 0) || (currentUser && r[currentUser] > 0);
+  }).length;
   var context = myRatings === 0 ? "Rate a few books and these will get smarter." : "Based on your taste and your circle's ratings.";
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:100, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
