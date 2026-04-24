@@ -525,7 +525,7 @@ function StarRating({ value, onChange, size, allowHalf, readOnly }) {
 
 // ── Storage ────────────────────────────────────────────────────────────────
 
-var SKEYS = { user: "shelved:currentUser", favs: "shelved:favGenres", justOnboarded: "shelved:justOnboarded" };
+var SKEYS = { user: "shelved:currentUser", userId: "shelved:currentUserId", favs: "shelved:favGenres", justOnboarded: "shelved:justOnboarded" };
 
 // Shared library lives in Supabase. Each book is a row.
 // Username stays in localStorage (just identifies "you" within the shared library).
@@ -561,6 +561,76 @@ async function loadUser() {
 }
 async function saveUser(name) { try { localStorage.setItem(SKEYS.user, name); } catch(e) {} }
 
+async function loadUserId() {
+  try { return localStorage.getItem(SKEYS.userId) || ""; } catch(e) { return ""; }
+}
+async function saveUserId(id) { try { localStorage.setItem(SKEYS.userId, id); } catch(e) {} }
+
+// Hash a PIN with a fixed app salt so identical PINs don\'t collide in storage.
+// Uses Web Crypto (available in all modern browsers).
+async function hashPin(pin) {
+  var encoder = new TextEncoder();
+  var data = encoder.encode("shelved-v1-salt:" + pin);
+  var buf = await crypto.subtle.digest("SHA-256", data);
+  var bytes = new Uint8Array(buf);
+  var hex = "";
+  for (var i = 0; i < bytes.length; i++) {
+    var h = bytes[i].toString(16);
+    if (h.length < 2) h = "0" + h;
+    hex += h;
+  }
+  return hex;
+}
+
+// Look up user by name (case-insensitive). Returns { id, name, pin_hash, fav_genres } or null.
+async function findUserByName(name) {
+  try {
+    var { data, error } = await supabase
+      .from("users")
+      .select("id, name, pin_hash, fav_genres")
+      .ilike("name", name.trim());
+    if (error) throw error;
+    return (data && data[0]) || null;
+  } catch(e) { console.error("findUserByName:", e); return null; }
+}
+
+// Create a new user. Returns the new user row or throws on conflict.
+async function createUser(name, pin, favGenres) {
+  var pinHash = await hashPin(pin);
+  try {
+    var { data, error } = await supabase
+      .from("users")
+      .insert([{ name: name.trim(), pin_hash: pinHash, fav_genres: favGenres || [] }])
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  } catch(e) {
+    if (e && e.code === "23505") throw new Error("Name already taken");
+    throw e;
+  }
+}
+
+// Validate name + PIN against DB. Returns user row on success, null on failure.
+async function authenticateUser(name, pin) {
+  var user = await findUserByName(name);
+  if (!user) return null;
+  var hash = await hashPin(pin);
+  if (hash !== user.pin_hash) return null;
+  return user;
+}
+
+// Update the fav_genres on an existing user.
+async function updateUserFavs(userId, favGenres) {
+  try {
+    var { error } = await supabase
+      .from("users")
+      .update({ fav_genres: favGenres || [] })
+      .eq("id", userId);
+    if (error) throw error;
+  } catch(e) { console.error("updateUserFavs:", e); }
+}
+
 function loadFavs() {
   try { var v = localStorage.getItem(SKEYS.favs); return v ? JSON.parse(v) : []; } catch(e) { return []; }
 }
@@ -595,6 +665,7 @@ export default function Shelved() {
   var booksArr = useState([]); var books = booksArr[0]; var setBooks = booksArr[1];
   var loadingArr = useState(true); var loading = loadingArr[0]; var setLoading = loadingArr[1];
   var userArr = useState(""); var currentUser = userArr[0]; var setCurrentUser = userArr[1];
+  var userIdArr = useState(""); var currentUserId = userIdArr[0]; var setCurrentUserId = userIdArr[1];
   var nameInputArr = useState(""); var nameInput = nameInputArr[0]; var setNameInput = nameInputArr[1];
   var showSearchArr = useState(false); var showSearch = showSearchArr[0]; var setShowSearch = showSearchArr[1];
   var showImportArr = useState(false); var showImport = showImportArr[0]; var setShowImport = showImportArr[1];
@@ -609,13 +680,14 @@ export default function Shelved() {
   var pulseArr = useState(false); var pulseForYou = pulseArr[0]; var setPulseForYou = pulseArr[1];
 
   useEffect(function() {
-    Promise.all([loadBooks(), loadUser()]).then(function(res) {
+    Promise.all([loadBooks(), loadUser(), loadUserId()]).then(function(res) {
       setBooks(res[0]);
       setCurrentUser(res[1]);
+      setCurrentUserId(res[2]);
       setFavGenres(loadFavs());
       // Pulse For You until the user has rated at least one book
       var myRatings = (res[0] || []).filter(function(b) {
-        return b.ratings && b.ratings[res[1]] > 0;
+        return b.ratings && (b.ratings[res[2]] > 0 || b.ratings[res[1]] > 0);
       }).length;
       if (myRatings === 0) {
         setPulseForYou(true);
@@ -639,19 +711,41 @@ export default function Shelved() {
     }
   }, [selectedBook]);
 
-  async function handleSetName() {
-    if (!nameInput.trim()) return;
-    setOnboardStep("genres");
-  }
-
-  async function finishOnboarding(selectedFavs) {
-    var name = nameInput.trim();
-    if (!name) return;
-    saveFavs(selectedFavs || []);
-    setFavGenres(selectedFavs || []);
+  async function handleAuth(user) {
+    // Called after successful signup or login.
+    saveFavs(user.fav_genres || []);
+    setFavGenres(user.fav_genres || []);
+    await saveUser(user.name);
+    await saveUserId(user.id);
+    setCurrentUser(user.name);
+    setCurrentUserId(user.id);
     setJustOnboarded(true);
-    await saveUser(name);
-    setCurrentUser(name);
+    setPulseForYou(true);
+
+    // Auto-claim: migrate any old string-keyed ratings/readers from books
+    // where the old key matches this user\'s name. One-time per fresh login.
+    var migrated = false;
+    var newBooks = books.map(function(b) {
+      var nb = Object.assign({}, b);
+      var changed = false;
+      if (b.readers && b.readers[user.name] !== undefined && !b.readers[user.id]) {
+        nb.readers = Object.assign({}, b.readers);
+        nb.readers[user.id] = nb.readers[user.name];
+        changed = true;
+      }
+      if (b.ratings && b.ratings[user.name] !== undefined && !b.ratings[user.id]) {
+        nb.ratings = Object.assign({}, b.ratings);
+        nb.ratings[user.id] = nb.ratings[user.name];
+        changed = true;
+      }
+      if (b.addedBy === user.name) { /* addedBy already matches name, no change needed */ }
+      if (changed) { migrated = true; return nb; }
+      return b;
+    });
+    if (migrated) {
+      setBooks(newBooks);
+      await saveBooks(newBooks);
+    }
   }
 
 
@@ -707,17 +801,18 @@ export default function Shelved() {
   }
 
   async function addBook(bookData, status, rating) {
+    var key = currentUserId || currentUser; // prefer user UUID
     var existing = books.find(function(b) { return b.id === bookData.id; });
     if (existing) {
-      var readers2 = Object.assign({}, existing.readers); readers2[currentUser] = status;
+      var readers2 = Object.assign({}, existing.readers); readers2[key] = status;
       var ratings2 = Object.assign({}, existing.ratings || {});
-      if (rating != null && rating > 0) ratings2[currentUser] = rating;
+      if (rating != null && rating > 0) ratings2[key] = rating;
       var upd2 = books.map(function(b) { return b.id === bookData.id ? Object.assign({}, b, { readers: readers2, ratings: ratings2 }) : b; });
       setBooks(upd2); await saveBooks(upd2); return;
     }
-    var newBook = Object.assign({}, bookData, { addedBy: currentUser, addedAt: Date.now(), readers: {}, ratings: {}, reviews: [] });
-    newBook.readers[currentUser] = status;
-    if (rating != null && rating > 0) newBook.ratings[currentUser] = rating;
+    var newBook = Object.assign({}, bookData, { addedBy: currentUser, addedByUserId: currentUserId, addedAt: Date.now(), readers: {}, ratings: {}, reviews: [] });
+    newBook.readers[key] = status;
+    if (rating != null && rating > 0) newBook.ratings[key] = rating;
     var upd = [newBook].concat(books);
     setBooks(upd); await saveBooks(upd);
   }
@@ -725,32 +820,55 @@ export default function Shelved() {
   async function importBooks(incoming) {
     var byId = new Map(books.map(function(b) { return [b.id, b]; }));
     var added = 0, merged = 0;
-    var newBooks = [];
+    var newBookIds = [];
 
-    // Pass 1: build up the merged list
+    // Merge into byId (no genre fetching yet — that happens async after save)
     for (var ri = 0; ri < incoming.length; ri++) {
       var row = incoming[ri];
       var ex = byId.get(row.id);
       if (ex) {
-        var r2 = Object.assign({}, ex.readers); if (row.status) r2[currentUser] = row.status;
-        var rt2 = Object.assign({}, ex.ratings || {}); if (row.rating > 0) rt2[currentUser] = row.rating;
+        var r2 = Object.assign({}, ex.readers); var uKey = currentUserId || currentUser;
+        if (row.status) r2[uKey] = row.status;
+        var rt2 = Object.assign({}, ex.ratings || {}); if (row.rating > 0) rt2[uKey] = row.rating;
         byId.set(row.id, Object.assign({}, ex, { readers: r2, ratings: rt2 }));
         merged++;
       } else {
-        var nb = { id:row.id, title:row.title, author:row.author, year:row.year||null, coverId:null, isbn:row.isbn||null, googleThumb:null, genre:null, addedBy:currentUser, addedAt:Date.now(), readers:{}, ratings:{}, reviews:[] };
-        if (row.status) nb.readers[currentUser] = row.status;
-        if (row.rating > 0) nb.ratings[currentUser] = row.rating;
+        var uKey2 = currentUserId || currentUser;
+        var nb = { id:row.id, title:row.title, author:row.author, year:row.year||null, coverId:null, isbn:row.isbn||null, googleThumb:null, genre:null, addedBy:currentUser, addedByUserId:currentUserId, addedAt:Date.now(), readers:{}, ratings:{}, reviews:[] };
+        if (row.status) nb.readers[uKey2] = row.status;
+        if (row.rating > 0) nb.ratings[uKey2] = row.rating;
         byId.set(row.id, nb);
-        newBooks.push(nb);
+        newBookIds.push(row.id);
         added++;
       }
     }
 
-    // Pass 2: fetch genres for new books. Parallel, but throttled in batches of 10.
+    // Save immediately — don\'t make the user wait on external APIs.
+    var upd = Array.from(byId.values());
+    setBooks(upd);
+    await saveBooks(upd);
+
+    // Fire-and-forget background genre enrichment. User can see their library
+    // immediately; genres appear as they\'re classified. Users can also manually
+    // tag via the book detail view or "Tag genres" button in header.
+    setTimeout(function() { enrichGenresInBackground(newBookIds); }, 100);
+
+    return { added: added, merged: merged };
+  }
+
+  async function enrichGenresInBackground(bookIds) {
+    // Per-fetch timeout wrapper — 4 seconds max per API call.
+    function fetchWithTimeout(url) {
+      return Promise.race([
+        fetch(url),
+        new Promise(function(_, rej) { setTimeout(function() { rej(new Error("timeout")); }, 4000); })
+      ]);
+    }
+
     async function fetchGenre(b) {
       try {
         if (b.isbn) {
-          var r1 = await fetch("https://openlibrary.org/isbn/" + b.isbn + ".json");
+          var r1 = await fetchWithTimeout("https://openlibrary.org/isbn/" + b.isbn + ".json");
           if (r1.ok) {
             var d1 = await r1.json();
             var g = classifyGenre(d1.subjects);
@@ -758,7 +876,7 @@ export default function Shelved() {
           }
         }
         var q = encodeURIComponent((b.title || "") + " " + (b.author || ""));
-        var r2 = await fetch("https://openlibrary.org/search.json?q=" + q + "&limit=1&fields=subject");
+        var r2 = await fetchWithTimeout("https://openlibrary.org/search.json?q=" + q + "&limit=1&fields=subject");
         if (r2.ok) {
           var d2 = await r2.json();
           if (d2.docs && d2.docs[0]) {
@@ -766,31 +884,44 @@ export default function Shelved() {
             if (g2) return g2;
           }
         }
-        var r3 = await fetch("https://www.googleapis.com/books/v1/volumes?q=" + q + "&maxResults=1&fields=items(volumeInfo(categories))");
-        if (r3.ok) {
-          var d3 = await r3.json();
-          if (d3.items && d3.items[0] && d3.items[0].volumeInfo) {
-            return classifyGenre(d3.items[0].volumeInfo.categories);
-          }
-        }
-      } catch(e) { /* skip */ }
+      } catch(e) { /* skip on timeout/error */ }
       return null;
     }
 
-    for (var bi = 0; bi < newBooks.length; bi += 10) {
-      var batch = newBooks.slice(bi, bi + 10);
-      var genres = await Promise.all(batch.map(fetchGenre));
-      for (var bj = 0; bj < batch.length; bj++) {
-        if (genres[bj]) {
-          var cur = byId.get(batch[bj].id);
-          if (cur) byId.set(batch[bj].id, Object.assign({}, cur, { genre: genres[bj] }));
+    // Process sequentially to avoid hammering Open Library
+    for (var i = 0; i < bookIds.length; i++) {
+      // Re-read latest books state each iteration; book may have been edited
+      var idx = -1;
+      for (var k = 0; k < books.length; k++) {
+        if (books[k].id === bookIds[i]) { idx = k; break; }
+      }
+      // books here is stale from closure — use a fresh read via setBooks updater
+      // This pattern uses the functional setter to get current state:
+      var genre = null;
+      try {
+        var bookNow = null;
+        setBooks(function(prev) {
+          bookNow = prev.find(function(x) { return x.id === bookIds[i]; });
+          return prev;
+        });
+        if (!bookNow || bookNow.genre) continue; // already tagged or gone
+        genre = await fetchGenre(bookNow);
+      } catch(e) { continue; }
+
+      if (genre) {
+        // Update state + persist using functional setter
+        var newList = null;
+        setBooks(function(prev) {
+          newList = prev.map(function(x) { return x.id === bookIds[i] ? Object.assign({}, x, { genre: genre }) : x; });
+          return newList;
+        });
+        if (newList) {
+          try { await saveBooks(newList); } catch(e) { /* skip */ }
         }
       }
+      // Small delay between requests to be polite
+      await new Promise(function(r) { setTimeout(r, 150); });
     }
-
-    var upd = Array.from(byId.values());
-    setBooks(upd); await saveBooks(upd);
-    return { added: added, merged: merged };
   }
 
   async function updateBook(bookId, updater) {
@@ -807,18 +938,20 @@ export default function Shelved() {
   async function renameUser(newName) {
     var trimmed = newName.trim();
     if (!trimmed || trimmed === currentUser) return;
+    // Check availability
+    var existing = await findUserByName(trimmed);
+    if (existing && existing.id !== currentUserId) {
+      alert("That name is already taken.");
+      return;
+    }
+    try {
+      var { error } = await supabase.from("users").update({ name: trimmed }).eq("id", currentUserId);
+      if (error) throw error;
+    } catch(e) { alert("Could not update name."); return; }
     var old = currentUser;
     var upd = books.map(function(b) {
       var n = Object.assign({}, b);
       if (b.addedBy === old) n.addedBy = trimmed;
-      if (b.readers && b.readers[old] !== undefined) {
-        n.readers = Object.assign({}, b.readers);
-        n.readers[trimmed] = n.readers[old]; delete n.readers[old];
-      }
-      if (b.ratings && b.ratings[old] !== undefined) {
-        n.ratings = Object.assign({}, b.ratings);
-        n.ratings[trimmed] = n.ratings[old]; delete n.ratings[old];
-      }
       if (Array.isArray(b.reviews)) {
         n.reviews = b.reviews.map(function(rv) { return rv.author === old ? Object.assign({}, rv, { author: trimmed }) : rv; });
       }
@@ -827,8 +960,14 @@ export default function Shelved() {
     await saveUser(trimmed); setBooks(upd); await saveBooks(upd); setCurrentUser(trimmed);
   }
 
+  function userHasRead(b) {
+    if (!b.readers) return false;
+    if (currentUserId && b.readers[currentUserId]) return true;
+    if (currentUser && b.readers[currentUser]) return true;
+    return false;
+  }
   var filteredBooks = books.filter(function(b) {
-    if (filter === "mine" && !(b.readers && b.readers[currentUser])) return false;
+    if (filter === "mine" && !userHasRead(b)) return false;
     if (filter !== "all" && filter !== "mine" && Object.values(b.readers || {}).indexOf(filter) === -1) return false;
     if (genreFilter && genreForBook(b) !== genreFilter) return false;
     return true;
@@ -840,17 +979,14 @@ export default function Shelved() {
 
   var counts = {
     all: books.length,
-    mine: books.filter(function(b) { return b.readers && b.readers[currentUser]; }).length,
+    mine: books.filter(userHasRead).length,
     reading: books.filter(function(b) { return Object.values(b.readers||{}).indexOf("reading") !== -1; }).length,
     read: books.filter(function(b) { return Object.values(b.readers||{}).indexOf("read") !== -1; }).length,
     want: books.filter(function(b) { return Object.values(b.readers||{}).indexOf("want") !== -1; }).length,
   };
 
-  if (!loading && !currentUser) {
-    if (onboardStep === "genres") {
-      return <GenreOnboarding onSubmit={finishOnboarding} />;
-    }
-    return <Onboarding nameInput={nameInput} setNameInput={setNameInput} onSubmit={handleSetName} />;
+  if (!loading && !currentUserId) {
+    return <AuthFlow onAuthed={handleAuth} />;
   }
 
   return (
@@ -879,19 +1015,232 @@ export default function Shelved() {
 
 // ── Onboarding ─────────────────────────────────────────────────────────────
 
-function Onboarding({ nameInput, setNameInput, onSubmit }) {
-  return (
-    <div style={{ minHeight:"100vh", background:BG, display:"flex", alignItems:"center", justifyContent:"center", padding:32, fontFamily:FONT_SANS }}>
-      <div style={{ maxWidth:520, width:"100%", textAlign:"center" }}>
-        <div style={{ fontSize:32, color:"#E63946", marginBottom:24, fontFamily:FONT_SERIF }}>✦</div>
-        <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(64px,12vw,120px)", fontWeight:400, letterSpacing:"-0.04em", lineHeight:0.95, margin:"0 0 16px 0", color:INK }}>
-          Shelved<span style={{ color:"#E63946" }}>.</span>
-        </h1>
-        <p style={{ fontFamily:FONT_SERIF, fontSize:20, fontStyle:"italic", color:MUTED, margin:"0 0 48px 0", fontWeight:400 }}>A private library for a closed circle of readers.</p>
-        <div style={{ display:"flex", gap:8, maxWidth:420, margin:"0 auto" }}>
-          <input style={{ flex:1, padding:"14px 18px", fontSize:15, border:"1px solid "+RULE_SOFT, borderRadius:999, background:"transparent", fontFamily:FONT_SANS, color:INK, outline:"none" }} placeholder="Your name" value={nameInput} onChange={function(e) { setNameInput(e.target.value); }} onKeyDown={function(e) { if (e.key === "Enter") onSubmit(); }} autoFocus />
-          <button style={{ padding:"14px 24px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={onSubmit}>Enter &rarr;</button>
+function AuthFlow({ onAuthed }) {
+  // modes: "choose" | "signin" | "signup-name" | "signup-pin" | "signup-genres"
+  var modeArr = useState("choose"); var mode = modeArr[0]; var setMode = modeArr[1];
+  var nameArr = useState(""); var name = nameArr[0]; var setName = nameArr[1];
+  var pinArr = useState(""); var pin = pinArr[0]; var setPin = pinArr[1];
+  var favsArr = useState([]); var favs = favsArr[0]; var setFavs = favsArr[1];
+  var errArr = useState(""); var error = errArr[0]; var setError = errArr[1];
+  var busyArr = useState(false); var busy = busyArr[0]; var setBusy = busyArr[1];
+
+  async function doSignin() {
+    setError("");
+    if (!name.trim()) { setError("Enter your name"); return; }
+    if (pin.length !== 4 || !/^\d{4}$/.test(pin)) { setError("PIN must be 4 digits"); return; }
+    setBusy(true);
+    try {
+      var user = await authenticateUser(name, pin);
+      if (!user) { setError("Name or PIN is incorrect"); setBusy(false); return; }
+      await onAuthed(user);
+    } catch(e) { setError("Something went wrong"); setBusy(false); }
+  }
+
+  async function doSignupCheck() {
+    setError("");
+    if (!name.trim()) { setError("Enter your name"); return; }
+    setBusy(true);
+    try {
+      var existing = await findUserByName(name);
+      if (existing) {
+        setError("That name is taken. If it\'s yours, tap Sign in.");
+        setBusy(false); return;
+      }
+      setMode("signup-pin");
+      setBusy(false);
+    } catch(e) { setError("Something went wrong"); setBusy(false); }
+  }
+
+  function proceedToGenres() {
+    setError("");
+    if (pin.length !== 4 || !/^\d{4}$/.test(pin)) { setError("Pick a 4-digit PIN"); return; }
+    setMode("signup-genres");
+  }
+
+  async function doSignup(selectedFavs) {
+    setBusy(true);
+    try {
+      var user = await createUser(name, pin, selectedFavs || []);
+      await onAuthed(user);
+    } catch(e) {
+      setError(e.message || "Could not create account");
+      setBusy(false);
+    }
+  }
+
+  var wrapStyle = { minHeight:"100vh", background:BG, display:"flex", alignItems:"center", justifyContent:"center", padding:"32px 20px", fontFamily:FONT_SANS };
+  var cardStyle = { maxWidth:520, width:"100%", textAlign:"center" };
+
+  // ── Choose mode ────────────────────────────────────────────────────────
+  if (mode === "choose") {
+    return (
+      <div style={wrapStyle}>
+        <div style={cardStyle}>
+          <div style={{ fontSize:32, color:"#E63946", marginBottom:24, fontFamily:FONT_SERIF }}>✦</div>
+          <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(56px,12vw,120px)", fontWeight:400, letterSpacing:"-0.04em", lineHeight:0.95, margin:"0 0 16px 0", color:INK }}>
+            Shelved<span style={{ color:"#E63946" }}>.</span>
+          </h1>
+          <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(16px,2.5vw,20px)", fontStyle:"italic", color:MUTED, margin:"0 0 40px 0", fontWeight:400 }}>A private library for a closed circle of readers.</p>
+          <div style={{ display:"flex", gap:10, flexDirection:"column", maxWidth:320, margin:"0 auto" }}>
+            <button style={{ padding:"14px 24px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={function() { setMode("signup-name"); setError(""); }}>
+              I\'m new here
+            </button>
+            <button style={{ padding:"14px 24px", background:"transparent", color:INK, border:"1px solid "+RULE, borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500 }} onClick={function() { setMode("signin"); setError(""); }}>
+              I already have an account
+            </button>
+          </div>
         </div>
+        <style>{GLOBAL_CSS}</style>
+      </div>
+    );
+  }
+
+  // ── Sign in: name + pin ────────────────────────────────────────────────
+  if (mode === "signin") {
+    return (
+      <div style={wrapStyle}>
+        <div style={cardStyle}>
+          <div style={{ fontSize:24, color:"#E63946", marginBottom:16, fontFamily:FONT_SERIF }}>✦</div>
+          <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(36px,7vw,64px)", fontWeight:400, letterSpacing:"-0.035em", lineHeight:1.0, margin:"0 0 14px" }}>
+            Welcome <em>back</em>
+          </h1>
+          <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(14px,2.4vw,17px)", fontStyle:"italic", color:MUTED, margin:"0 0 32px" }}>
+            Your name and 4-digit PIN.
+          </p>
+          <div style={{ display:"flex", flexDirection:"column", gap:10, maxWidth:320, margin:"0 auto" }}>
+            <input style={{ padding:"14px 18px", fontSize:15, border:"1px solid "+RULE_SOFT, borderRadius:999, background:"transparent", fontFamily:FONT_SANS, color:INK, outline:"none", textAlign:"center" }} placeholder="Your name" value={name} onChange={function(e) { setName(e.target.value); }} autoFocus />
+            <input type="tel" inputMode="numeric" maxLength={4} pattern="[0-9]{4}" style={{ padding:"14px 18px", fontSize:22, letterSpacing:"0.5em", border:"1px solid "+RULE_SOFT, borderRadius:999, background:"transparent", fontFamily:FONT_MONO, color:INK, outline:"none", textAlign:"center" }} placeholder="PIN" value={pin} onChange={function(e) { setPin(e.target.value.replace(/[^0-9]/g,"").slice(0,4)); }} onKeyDown={function(e) { if (e.key === "Enter") doSignin(); }} />
+            {error && <div style={{ fontFamily:FONT_SERIF, fontSize:13, fontStyle:"italic", color:"#C62828", padding:"4px 0" }}>{error}</div>}
+            <button style={{ padding:"14px 24px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500, opacity:busy?0.6:1 }} disabled={busy} onClick={doSignin}>
+              {busy ? "Checking..." : "Sign in →"}
+            </button>
+            <button style={{ padding:"8px", background:"transparent", border:"none", color:MUTED, fontFamily:FONT_SERIF, fontSize:13, fontStyle:"italic", cursor:"pointer" }} onClick={function() { setMode("choose"); setError(""); }}>
+              ← Back
+            </button>
+          </div>
+        </div>
+        <style>{GLOBAL_CSS}</style>
+      </div>
+    );
+  }
+
+  // ── Signup name step ───────────────────────────────────────────────────
+  if (mode === "signup-name") {
+    return (
+      <div style={wrapStyle}>
+        <div style={cardStyle}>
+          <div style={{ fontSize:24, color:"#E63946", marginBottom:16, fontFamily:FONT_SERIF }}>✦</div>
+          <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(36px,7vw,64px)", fontWeight:400, letterSpacing:"-0.035em", lineHeight:1.0, margin:"0 0 14px" }}>
+            What should we <em>call you</em>?
+          </h1>
+          <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(14px,2.4vw,17px)", fontStyle:"italic", color:MUTED, margin:"0 0 32px" }}>
+            Your circle will see this name on your ratings and reviews.
+          </p>
+          <div style={{ display:"flex", flexDirection:"column", gap:10, maxWidth:320, margin:"0 auto" }}>
+            <input style={{ padding:"14px 18px", fontSize:15, border:"1px solid "+RULE_SOFT, borderRadius:999, background:"transparent", fontFamily:FONT_SANS, color:INK, outline:"none", textAlign:"center" }} placeholder="Your name" value={name} onChange={function(e) { setName(e.target.value); }} onKeyDown={function(e) { if (e.key === "Enter") doSignupCheck(); }} autoFocus />
+            {error && <div style={{ fontFamily:FONT_SERIF, fontSize:13, fontStyle:"italic", color:"#C62828", padding:"4px 0" }}>{error}</div>}
+            <button style={{ padding:"14px 24px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500, opacity:busy?0.6:1 }} disabled={busy} onClick={doSignupCheck}>
+              {busy ? "Checking..." : "Continue →"}
+            </button>
+            <button style={{ padding:"8px", background:"transparent", border:"none", color:MUTED, fontFamily:FONT_SERIF, fontSize:13, fontStyle:"italic", cursor:"pointer" }} onClick={function() { setMode("choose"); setError(""); }}>
+              ← Back
+            </button>
+          </div>
+        </div>
+        <style>{GLOBAL_CSS}</style>
+      </div>
+    );
+  }
+
+  // ── Signup PIN step ────────────────────────────────────────────────────
+  if (mode === "signup-pin") {
+    return (
+      <div style={wrapStyle}>
+        <div style={cardStyle}>
+          <div style={{ fontSize:24, color:"#E63946", marginBottom:16, fontFamily:FONT_SERIF }}>✦</div>
+          <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(36px,7vw,64px)", fontWeight:400, letterSpacing:"-0.035em", lineHeight:1.0, margin:"0 0 14px" }}>
+            Choose a <em>4-digit PIN</em>
+          </h1>
+          <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(14px,2.4vw,17px)", fontStyle:"italic", color:MUTED, margin:"0 0 32px" }}>
+            You\'ll use this to sign in on other devices. Pick something memorable — there\'s no reset.
+          </p>
+          <div style={{ display:"flex", flexDirection:"column", gap:10, maxWidth:320, margin:"0 auto" }}>
+            <input type="tel" inputMode="numeric" maxLength={4} pattern="[0-9]{4}" style={{ padding:"14px 18px", fontSize:28, letterSpacing:"0.5em", border:"1px solid "+RULE_SOFT, borderRadius:999, background:"transparent", fontFamily:FONT_MONO, color:INK, outline:"none", textAlign:"center" }} placeholder="••••" value={pin} onChange={function(e) { setPin(e.target.value.replace(/[^0-9]/g,"").slice(0,4)); }} onKeyDown={function(e) { if (e.key === "Enter" && pin.length === 4) proceedToGenres(); }} autoFocus />
+            {error && <div style={{ fontFamily:FONT_SERIF, fontSize:13, fontStyle:"italic", color:"#C62828", padding:"4px 0" }}>{error}</div>}
+            <button style={{ padding:"14px 24px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500, opacity:pin.length!==4?0.5:1 }} disabled={pin.length !== 4} onClick={proceedToGenres}>
+              Continue →
+            </button>
+            <button style={{ padding:"8px", background:"transparent", border:"none", color:MUTED, fontFamily:FONT_SERIF, fontSize:13, fontStyle:"italic", cursor:"pointer" }} onClick={function() { setMode("signup-name"); setError(""); }}>
+              ← Back
+            </button>
+          </div>
+        </div>
+        <style>{GLOBAL_CSS}</style>
+      </div>
+    );
+  }
+
+  // ── Signup genres step (final) ─────────────────────────────────────────
+  if (mode === "signup-genres") {
+    return (
+      <div style={wrapStyle}>
+        <GenreOnboardingInner busy={busy} error={error} onSubmit={doSignup} />
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function GenreOnboardingInner({ onSubmit, busy, error }) {
+  var selArr = useState([]); var selected = selArr[0]; var setSelected = selArr[1];
+  function toggle(g) {
+    if (selected.indexOf(g) !== -1) setSelected(selected.filter(function(x) { return x !== g; }));
+    else if (selected.length < 3) setSelected(selected.concat([g]));
+  }
+  return (
+    <div style={{ maxWidth:640, width:"100%", textAlign:"center" }}>
+      <div style={{ fontSize:24, color:"#E63946", marginBottom:16, fontFamily:FONT_SERIF }}>✦</div>
+      <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(36px,7vw,64px)", fontWeight:400, letterSpacing:"-0.035em", lineHeight:1.0, margin:"0 0 14px" }}>
+        What do you <em>love</em> to read?
+      </h1>
+      <p style={{ fontFamily:FONT_SERIF, fontSize:"clamp(14px,2.4vw,17px)", fontStyle:"italic", color:MUTED, margin:"0 0 32px", fontWeight:400 }}>
+        Pick up to three. We\'ll tune your recommendations.
+      </p>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:8, justifyContent:"center", marginBottom:28 }}>
+        {GENRES.filter(function(g) { return g !== "Other"; }).map(function(g) {
+          var active = selected.indexOf(g) !== -1;
+          var disabled = !active && selected.length >= 3;
+          return (
+            <button key={g}
+              onClick={function() { toggle(g); }}
+              disabled={disabled}
+              style={{
+                padding:"10px 18px",
+                background: active ? INK : "transparent",
+                color: active ? BG : (disabled ? RULE : INK),
+                border: "1px solid " + (active ? INK : (disabled ? RULE_SOFT : RULE)),
+                borderRadius: 999, fontSize: 14,
+                cursor: disabled ? "default" : "pointer",
+                fontFamily: FONT_SANS, fontWeight: 500,
+                opacity: disabled ? 0.5 : 1,
+                transition: "all 0.15s ease",
+              }}>
+              {active && "✓ "}{g}
+            </button>
+          );
+        })}
+      </div>
+      {error && <div style={{ fontFamily:FONT_SERIF, fontSize:13, fontStyle:"italic", color:"#C62828", marginBottom:12 }}>{error}</div>}
+      <div style={{ display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap" }}>
+        <button disabled={busy} style={{ padding:"14px 24px", background:"transparent", color:MUTED, border:"1px solid "+RULE_SOFT, borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500, opacity:busy?0.6:1 }}
+          onClick={function() { onSubmit([]); }}>
+          Skip for now
+        </button>
+        <button disabled={busy || selected.length === 0} style={{ padding:"14px 28px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:14, cursor:"pointer", fontFamily:FONT_SANS, fontWeight:500, opacity:(busy||selected.length===0)?0.5:1 }}
+          onClick={function() { onSubmit(selected); }}>
+          {busy ? "Creating..." : (selected.length === 0 ? "Pick at least one" : "Finish →")}
+        </button>
       </div>
       <style>{GLOBAL_CSS}</style>
     </div>
@@ -980,10 +1329,15 @@ function Header({ user, bookCount, untaggedCount, pulseForYou, onAdd, onImport, 
   return (
     <header style={{ padding:"24px clamp(16px, 4vw, 48px) 36px", borderBottom:"1px solid "+RULE, position:"relative", zIndex:1 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"clamp(28px, 6vw, 64px)", gap:16, flexWrap:"wrap" }}>
-        <div style={{ display:"flex", alignItems:"baseline", gap:16 }}>
-          <span style={{ fontFamily:FONT_DISPLAY, fontSize:22, fontWeight:500, letterSpacing:"-0.02em" }}>
-            Shelved<span style={{ color:"#E63946" }}>.</span>
-          </span>
+        <div style={{ display:"flex", alignItems:"baseline", gap:16, flexWrap:"wrap" }}>
+          <div style={{ display:"flex", flexDirection:"column", gap:1, lineHeight:1 }}>
+            <span style={{ fontFamily:FONT_DISPLAY, fontSize:22, fontWeight:500, letterSpacing:"-0.02em" }}>
+              Shelved<span style={{ color:"#E63946" }}>.</span>
+            </span>
+            <span style={{ fontFamily:FONT_MONO, fontSize:7, color:MUTED, letterSpacing:"0.12em", textTransform:"uppercase", opacity:0.75 }}>
+              by artyfartybob
+            </span>
+          </div>
           <span style={{ fontFamily:FONT_MONO, fontSize:10, color:MUTED, letterSpacing:"0.08em", textTransform:"uppercase" }}>
             {String(bookCount).padStart(3,"0")} volumes &middot;{" "}
             <button className="nameBtn" style={{ background:"transparent", border:"none", padding:0, color:MUTED, fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.08em", textTransform:"uppercase", cursor:"pointer", borderBottom:"1px dotted "+MUTED }} onClick={onEditName}>{user}</button>
