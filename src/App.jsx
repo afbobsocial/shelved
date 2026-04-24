@@ -1026,7 +1026,7 @@ export default function Shelved() {
       ) : (
         <SpineGrid books={filteredBooks} onSelect={setSelectedBook} onAdd={function() { setShowSearch(true); }} />
       )}
-      {showSearch && <SearchOverlay onClose={function() { setShowSearch(false); }} onAdd={async function(bd, st, rt) { await addBook(bd, st, rt); setShowSearch(false); }} existingIds={new Set(books.map(function(b) { return b.id; }))} />}
+      {showSearch && <SearchOverlay onClose={function() { setShowSearch(false); }} onAdd={async function(bd, st, rt) { await addBook(bd, st, rt); }} existingIds={new Set(books.map(function(b) { return b.id; }))} />}
       {showImport && <ImportModal onClose={function() { setShowImport(false); }} onImport={importBooks} />}
       {showRecs && <RecsModal books={books} currentUser={currentUser} currentUserId={currentUserId} userMap={userMap} favGenres={favGenres} onClose={function() { setShowRecs(false); }} onSelect={function(bk) { setShowRecs(false); setSelectedBook(bk); }} />}
       {showNameEdit && <NameEditModal currentName={currentUser} onClose={function() { setShowNameEdit(false); }} onSave={async function(n) { await renameUser(n); setShowNameEdit(false); }} />}
@@ -1502,59 +1502,102 @@ function CircleView({ books, userMap, onSelect }) {
 }
 
 function FannedHand({ books, onSelect }) {
-  // Each card overlaps the previous by ~55-65%. Rotate subtly for hand-of-cards effect.
-  // Hovering brings a card forward and lifts it. Click opens detail.
+  // Cards overlap each other. To avoid hover-zone collision between layered
+  // cards, we track the mouse position against the visible strip of each card
+  // rather than relying on per-card onMouseEnter.
   var hoverArr = useState(-1); var hovered = hoverArr[0]; var setHovered = hoverArr[1];
 
-  var cardW = 120; // base width
+  var cardW = 120;
   var cardH = 180;
-  var overlap = 80; // how many pixels of each card is visible
-  var rowHeight = cardH + 40;
+  var overlap = 42; // px of each card that\'s visible (the exposed strip on the left edge)
+  var rowHeight = cardH + 60;
+  var containerRef = useRef(null);
+
+  function handleMove(e) {
+    if (!containerRef.current) return;
+    var rect = containerRef.current.getBoundingClientRect();
+    var x = e.clientX - rect.left + containerRef.current.scrollLeft;
+    var y = e.clientY - rect.top;
+    // Only register hover if the pointer is over the card row vertically
+    if (y < 0 || y > cardH + 20) { setHovered(-1); return; }
+    // Which card strip is under the pointer?
+    // First N-1 cards occupy strips of width `overlap`. The last card gets full width.
+    var idx = Math.floor(x / overlap);
+    if (idx >= books.length) idx = books.length - 1;
+    if (idx < 0) idx = -1;
+    setHovered(idx);
+  }
 
   return (
-    <div style={{
-      position:"relative",
-      height: rowHeight,
-      overflowX: "auto",
-      overflowY: "visible",
-      paddingTop: 20,
-    }} className="chipScroll">
+    <div
+      ref={containerRef}
+      onMouseMove={handleMove}
+      onMouseLeave={function() { setHovered(-1); }}
+      style={{
+        position:"relative",
+        height: rowHeight,
+        overflowX: "auto",
+        overflowY: "visible",
+        paddingTop: 20,
+      }}
+      className="chipScroll"
+    >
       <div style={{
         position:"relative",
         height: cardH,
         width: Math.max(books.length * overlap + (cardW - overlap) + 40, 100),
-        display: "block",
       }}>
         {books.map(function(book, i) {
-          var rot = ((i % 7) - 3) * 1.5; // subtle rotation per card
+          var rot = ((i % 7) - 3) * 1.5;
           var isHover = hovered === i;
           var z = isHover ? 100 : i;
-          var lift = isHover ? -16 : 0;
+          var lift = isHover ? -20 : 0;
+          // When hovered, nudge this card out of the pack so it\'s readable
+          var shiftX = isHover ? 18 : 0;
           return (
-            <button key={book.id}
+            <div key={book.id}
               onClick={function() { onSelect(book); }}
-              onMouseEnter={function() { setHovered(i); }}
-              onMouseLeave={function() { setHovered(-1); }}
               style={{
                 position:"absolute",
-                left: i * overlap,
+                left: i * overlap + shiftX,
                 top: 0,
                 width: cardW,
                 height: cardH,
                 background: spineColorFor(book),
-                border: "none",
                 borderRadius: 4,
-                padding: 0,
                 cursor: "pointer",
                 overflow: "hidden",
-                transform: "rotate(" + (isHover ? 0 : rot) + "deg) translateY(" + lift + "px) scale(" + (isHover ? 1.05 : 1) + ")",
+                transform: "rotate(" + (isHover ? 0 : rot) + "deg) translateY(" + lift + "px) scale(" + (isHover ? 1.1 : 1) + ")",
                 transformOrigin: "bottom center",
-                transition: "transform 0.28s cubic-bezier(0.2,0.8,0.2,1), box-shadow 0.28s ease",
-                boxShadow: isHover ? "0 20px 40px rgba(0,0,0,0.3)" : "0 4px 12px rgba(0,0,0,0.12)",
+                transition: "transform 0.28s cubic-bezier(0.2,0.8,0.2,1), left 0.28s cubic-bezier(0.2,0.8,0.2,1), box-shadow 0.28s ease",
+                boxShadow: isHover ? "0 24px 44px rgba(0,0,0,0.32)" : "0 4px 12px rgba(0,0,0,0.12)",
                 zIndex: z,
+                pointerEvents: "none", // hover handled on parent; parent handles clicks via child click bubble
               }}>
               <CoverImage book={book} showMetaOnFallback={true} />
-            </button>
+            </div>
+          );
+        })}
+        {/* Invisible click capture zones — one per card, sized to the visible strip */}
+        {books.map(function(book, i) {
+          var isLast = i === books.length - 1;
+          return (
+            <button key={"hit-" + book.id}
+              onClick={function(e) { e.stopPropagation(); onSelect(book); }}
+              aria-label={book.title}
+              style={{
+                position:"absolute",
+                left: i * overlap,
+                top: 0,
+                width: isLast ? cardW : overlap,
+                height: cardH,
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                zIndex: hovered === i ? 101 : 200,
+              }}
+            />
           );
         })}
       </div>
