@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, memo } from "react";
-import { Search, BookOpen, MessageCircle, Plus, X, Send, Loader2, Bookmark, Check, Trash2, Link2, Upload, Sparkles, Layers, AlignLeft, Wand2 } from "lucide-react";
+import { Search, BookOpen, MessageCircle, Plus, X, Send, Loader2, Bookmark, Check, Trash2, Link2, Upload, Sparkles, Layers, AlignLeft, Wand2, Users, ChevronLeft } from "lucide-react";
 import Papa from "papaparse";
 import { createClient } from "@supabase/supabase-js";
 
@@ -679,6 +679,7 @@ export default function Shelved() {
   var nameInputArr = useState(""); var nameInput = nameInputArr[0]; var setNameInput = nameInputArr[1];
   var showSearchArr = useState(false); var showSearch = showSearchArr[0]; var setShowSearch = showSearchArr[1];
   var showImportArr = useState(false); var showImport = showImportArr[0]; var setShowImport = showImportArr[1];
+  var showCircleArr = useState(false); var showCircle = showCircleArr[0]; var setShowCircle = showCircleArr[1];
   var showRecsArr = useState(false); var showRecs = showRecsArr[0]; var setShowRecs = showRecsArr[1];
   var showNameEditArr = useState(false); var showNameEdit = showNameEditArr[0]; var setShowNameEdit = showNameEditArr[1];
   var selectedBookArr = useState(null); var selectedBook = selectedBookArr[0]; var setSelectedBook = selectedBookArr[1];
@@ -987,8 +988,7 @@ export default function Shelved() {
   }
   var filteredBooks = books.filter(function(b) {
     if (filter === "mine" && !userHasRead(b)) return false;
-    if (filter === "circle" && isMyBook(b)) return false;
-    if (filter !== "all" && filter !== "mine" && filter !== "circle" && Object.values(b.readers || {}).indexOf(filter) === -1) return false;
+    if (filter !== "all" && filter !== "mine" && Object.values(b.readers || {}).indexOf(filter) === -1) return false;
     if (genreFilter && genreForBook(b) !== genreFilter) return false;
     return true;
   });
@@ -1000,7 +1000,6 @@ export default function Shelved() {
   var counts = {
     all: books.length,
     mine: books.filter(userHasRead).length,
-    circle: books.filter(function(b) { return !isMyBook(b); }).length,
     reading: books.filter(function(b) { return Object.values(b.readers||{}).indexOf("reading") !== -1; }).length,
     read: books.filter(function(b) { return Object.values(b.readers||{}).indexOf("read") !== -1; }).length,
     want: books.filter(function(b) { return Object.values(b.readers||{}).indexOf("want") !== -1; }).length,
@@ -1013,21 +1012,20 @@ export default function Shelved() {
   return (
     <div style={{ minHeight:"100vh", background:BG, fontFamily:FONT_SANS, color:INK, position:"relative", overflowX:"hidden" }}>
       <GradientBackdrop />
-      <Header user={currentUser} bookCount={books.length} untaggedCount={books.filter(function(b) { return !b.genre; }).length} pulseForYou={pulseForYou} onAdd={function() { setShowSearch(true); }} onImport={function() { setShowImport(true); }} onRecs={function() { setShowRecs(true); setPulseForYou(false); }} onEditName={function() { setShowNameEdit(true); }} onBackfill={backfillGenres} />
+      <Header user={currentUser} bookCount={books.length} untaggedCount={books.filter(function(b) { return !b.genre; }).length} pulseForYou={pulseForYou} onAdd={function() { setShowSearch(true); }} onCircle={function() { setShowCircle(true); }} onRecs={function() { setShowRecs(true); setPulseForYou(false); }} onEditName={function() { setShowNameEdit(true); }} onBackfill={backfillGenres} />
       <FilterBar filter={filter} setFilter={setFilter} view={view} setView={setView} genreFilter={genreFilter} setGenreFilter={setGenreFilter} genreCounts={genreCounts} counts={counts} />
       {loading ? (
         <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:10, padding:120, color:MUTED, fontSize:13, fontFamily:FONT_MONO }}><Loader2 size={18} className="spin" /><span>Loading</span></div>
       ) : filteredBooks.length === 0 ? (
         <EmptyState onAdd={function() { setShowSearch(true); }} filter={filter} />
-      ) : filter === "circle" ? (
-        <CircleView books={filteredBooks} userMap={userMap} onSelect={setSelectedBook} />
       ) : view === "stack" ? (
         <StackView books={filteredBooks} onSelect={setSelectedBook} onAdd={function() { setShowSearch(true); }} />
       ) : (
         <SpineGrid books={filteredBooks} onSelect={setSelectedBook} onAdd={function() { setShowSearch(true); }} />
       )}
-      {showSearch && <SearchOverlay onClose={function() { setShowSearch(false); }} onAdd={async function(bd, st, rt) { await addBook(bd, st, rt); }} existingIds={new Set(books.map(function(b) { return b.id; }))} />}
+      {showSearch && <SearchOverlay onClose={function() { setShowSearch(false); }} onAdd={async function(bd, st, rt) { await addBook(bd, st, rt); }} onImport={function() { setShowSearch(false); setShowImport(true); }} existingIds={new Set(books.map(function(b) { return b.id; }))} />}
       {showImport && <ImportModal onClose={function() { setShowImport(false); }} onImport={importBooks} />}
+      {showCircle && <MyCircleOverlay books={books} currentUser={currentUser} currentUserId={currentUserId} userMap={userMap} onClose={function() { setShowCircle(false); }} onSelectBook={function(b) { setShowCircle(false); setSelectedBook(b); }} />}
       {showRecs && <RecsModal books={books} currentUser={currentUser} currentUserId={currentUserId} userMap={userMap} favGenres={favGenres} onClose={function() { setShowRecs(false); }} onSelect={function(bk) { setShowRecs(false); setSelectedBook(bk); }} />}
       {showNameEdit && <NameEditModal currentName={currentUser} onClose={function() { setShowNameEdit(false); }} onSave={async function(n) { await renameUser(n); setShowNameEdit(false); }} />}
       {selectedBook && <BookDetail book={selectedBook} currentUser={currentUser} currentUserId={currentUserId} userMap={userMap} siblings={filteredBooks} onNavigate={setSelectedBook} onClose={function() { setSelectedBook(null); }} onUpdate={updateBook} onRemove={removeBook} />}
@@ -1338,7 +1336,7 @@ function GenreOnboarding({ onSubmit }) {
 
 // ── Header ─────────────────────────────────────────────────────────────────
 
-function Header({ user, bookCount, untaggedCount, pulseForYou, onAdd, onImport, onRecs, onEditName, onBackfill }) {
+function Header({ user, bookCount, untaggedCount, pulseForYou, onAdd, onCircle, onRecs, onEditName, onBackfill }) {
   var backArr = useState("idle"); var backState = backArr[0]; var setBackState = backArr[1];
   var resArr = useState(null); var backResult = resArr[0]; var setBackResult = resArr[1];
   async function doBackfill() {
@@ -1367,8 +1365,8 @@ function Header({ user, bookCount, untaggedCount, pulseForYou, onAdd, onImport, 
           </span>
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-          <button style={{ display:"flex", alignItems:"center", gap:6, padding:"10px 16px", background:"transparent", color:INK, border:"1px solid "+RULE, borderRadius:999, fontSize:13, fontWeight:500, cursor:"pointer", fontFamily:FONT_SANS }} onClick={onImport}>
-            <Upload size={14} strokeWidth={2} /> Import
+          <button style={{ display:"flex", alignItems:"center", gap:6, padding:"10px 16px", background:"transparent", color:INK, border:"1px solid "+RULE, borderRadius:999, fontSize:13, fontWeight:500, cursor:"pointer", fontFamily:FONT_SANS }} onClick={onCircle}>
+            <Users size={14} strokeWidth={2} /> My Circle
           </button>
           <button style={{ display:"flex", alignItems:"center", gap:6, padding:"10px 18px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:13, fontWeight:500, cursor:"pointer", fontFamily:FONT_SANS }} onClick={onAdd}>
             <Plus size={14} strokeWidth={2.5} /> Add a book
@@ -1411,7 +1409,7 @@ function Header({ user, bookCount, untaggedCount, pulseForYou, onAdd, onImport, 
 
 function FilterBar({ filter, setFilter, view, setView, counts, genreFilter, setGenreFilter, genreCounts }) {
   var filters = [
-    { k:"all", label:"All" }, { k:"mine", label:"Mine" }, { k:"circle", label:"Circle" },
+    { k:"all", label:"All" }, { k:"mine", label:"Mine" },
     { k:"reading", label:"Reading" }, { k:"read", label:"Finished" }, { k:"want", label:"Wishlist" },
   ];
   var activeGenres = GENRES.filter(function(g) { return (genreCounts[g] || 0) > 0; })
@@ -1430,16 +1428,14 @@ function FilterBar({ filter, setFilter, view, setView, counts, genreFilter, setG
             );
           })}
         </div>
-        {filter !== "circle" && (
-          <div style={{ display:"flex", padding:3, background:"rgba(14,14,14,0.06)", borderRadius:999, flexShrink:0 }}>
-            <button title="Spines" style={{ padding:"7px 12px", background:view==="spines"?BG:"transparent", color:view==="spines"?INK:MUTED, border:"none", borderRadius:999, cursor:"pointer", display:"flex", alignItems:"center", boxShadow:view==="spines"?"0 1px 3px rgba(0,0,0,0.08)":"none" }} onClick={function() { setView("spines"); }}>
-              <AlignLeft size={15} strokeWidth={2} />
-            </button>
-            <button title="Stack" style={{ padding:"7px 12px", background:view==="stack"?BG:"transparent", color:view==="stack"?INK:MUTED, border:"none", borderRadius:999, cursor:"pointer", display:"flex", alignItems:"center", boxShadow:view==="stack"?"0 1px 3px rgba(0,0,0,0.08)":"none" }} onClick={function() { setView("stack"); }}>
-              <Layers size={15} strokeWidth={2} />
-            </button>
-          </div>
-        )}
+        <div style={{ display:"flex", padding:3, background:"rgba(14,14,14,0.06)", borderRadius:999, flexShrink:0 }}>
+          <button title="Spines" style={{ padding:"7px 12px", background:view==="spines"?BG:"transparent", color:view==="spines"?INK:MUTED, border:"none", borderRadius:999, cursor:"pointer", display:"flex", alignItems:"center", boxShadow:view==="spines"?"0 1px 3px rgba(0,0,0,0.08)":"none" }} onClick={function() { setView("spines"); }}>
+            <AlignLeft size={15} strokeWidth={2} />
+          </button>
+          <button title="Stack" style={{ padding:"7px 12px", background:view==="stack"?BG:"transparent", color:view==="stack"?INK:MUTED, border:"none", borderRadius:999, cursor:"pointer", display:"flex", alignItems:"center", boxShadow:view==="stack"?"0 1px 3px rgba(0,0,0,0.08)":"none" }} onClick={function() { setView("stack"); }}>
+            <Layers size={15} strokeWidth={2} />
+          </button>
+        </div>
       </div>
       {activeGenres.length > 0 && (
         <div className="chipScroll" style={{ display:"flex", gap:6, alignItems:"center", overflowX:"auto", padding:"0 clamp(16px, 4vw, 48px) 14px" }}>
@@ -1567,6 +1563,172 @@ function FannedHand({ books, onSelect }) {
     </div>
   );
 }
+}
+
+
+// ── My Circle overlay ──────────────────────────────────────────────────────
+// Carousel of member cards. Clicking a card expands to show that person's shelf.
+
+function MyCircleOverlay({ books, currentUser, currentUserId, userMap, onClose, onSelectBook }) {
+  var selArr = useState(null); var selectedMember = selArr[0]; var setSelectedMember = selArr[1];
+
+  // Group books by addedBy (name). Include "me" but label specially.
+  var groups = {};
+  books.forEach(function(b) {
+    var by = b.addedBy || "Unknown";
+    if (!groups[by]) groups[by] = [];
+    groups[by].push(b);
+  });
+  var members = Object.keys(groups).sort(function(a,b) {
+    return groups[b].length - groups[a].length;
+  });
+
+  // Optional: prepend "You" card explicitly if current user has books
+  function labelFor(name) {
+    return name === currentUser ? name + " (you)" : name;
+  }
+
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:200, background:BG, display:"flex", flexDirection:"column", animation:"overlayIn 0.35s ease", overflowY:"auto" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"28px clamp(16px, 4vw, 48px) 0" }}>
+        <div style={{ fontFamily:FONT_MONO, fontSize:11, color:MUTED, letterSpacing:"0.2em" }}>MY CIRCLE</div>
+        <button style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 18px", background:"transparent", border:"1px solid "+RULE_SOFT, borderRadius:999, fontSize:13, fontFamily:FONT_SANS, color:INK, cursor:"pointer" }} onClick={onClose}>Close <X size={16} strokeWidth={2} /></button>
+      </div>
+
+      {selectedMember === null ? (
+        <div style={{ padding:"40px clamp(16px, 4vw, 48px) 80px" }}>
+          <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(40px,6vw,72px)", fontWeight:400, letterSpacing:"-0.035em", lineHeight:1.0, margin:"0 0 12px" }}>
+            Everyone\'s <em>shelf</em>.
+          </h1>
+          <p style={{ fontFamily:FONT_SERIF, fontStyle:"italic", fontSize:17, color:MUTED, margin:"0 0 48px", letterSpacing:"-0.01em" }}>
+            Pick a reader to browse what they\'ve shelved.
+          </p>
+
+          {members.length === 0 ? (
+            <div style={{ padding:"60px 20px", textAlign:"center", fontFamily:FONT_SERIF, fontStyle:"italic", fontSize:18, color:MUTED }}>
+              No books on any shelf yet.
+            </div>
+          ) : (
+            <div className="chipScroll" style={{ display:"flex", gap:24, overflowX:"auto", paddingBottom:32, paddingRight:48 }}>
+              {members.map(function(member, mi) {
+                return (
+                  <MemberCard
+                    key={member}
+                    name={member}
+                    label={labelFor(member)}
+                    books={groups[member]}
+                    index={mi}
+                    onClick={function() { setSelectedMember(member); }}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : (
+        <MemberShelf
+          member={selectedMember}
+          label={labelFor(selectedMember)}
+          books={groups[selectedMember] || []}
+          onBack={function() { setSelectedMember(null); }}
+          onSelectBook={onSelectBook}
+        />
+      )}
+
+      <style>{GLOBAL_CSS}</style>
+    </div>
+  );
+}
+
+function MemberCard({ name, label, books, index, onClick }) {
+  // Visual: a mini "shelf" preview — stack of cover strips on top of each other.
+  var previewBooks = books.slice(0, 5);
+  return (
+    <button onClick={onClick}
+      className="memberCard"
+      style={{
+        flex:"0 0 auto",
+        width: 240,
+        padding: 20,
+        background: "transparent",
+        border: "1px solid "+RULE_SOFT,
+        borderRadius: 4,
+        cursor: "pointer",
+        fontFamily: FONT_SANS,
+        textAlign: "left",
+        display: "flex",
+        flexDirection: "column",
+        gap: 16,
+        animation: "resultIn 0.5s ease both",
+        animationDelay: (index*60)+"ms",
+        transition: "transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease",
+      }}>
+      {/* Mini shelf preview: stacked cover slices */}
+      <div style={{ height: 200, display:"flex", flexDirection:"column-reverse", gap:4, padding:"12px 14px", background:"rgba(14,14,14,0.04)", borderRadius:2, overflow:"hidden" }}>
+        {previewBooks.length === 0 ? (
+          <div style={{ fontFamily:FONT_SERIF, fontStyle:"italic", fontSize:13, color:MUTED, alignSelf:"center", marginTop:"auto", marginBottom:"auto" }}>No books yet</div>
+        ) : previewBooks.map(function(b, i) {
+          return (
+            <div key={b.id} style={{
+              height: 22,
+              background: spineColorFor(b),
+              borderRadius: 1,
+              display: "flex",
+              alignItems: "center",
+              padding: "0 8px",
+              flexShrink: 0,
+              boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+            }}>
+              <span style={{
+                fontFamily: FONT_SERIF,
+                fontSize: 10,
+                fontWeight: 500,
+                color: "#fff",
+                letterSpacing: "-0.01em",
+                overflow: "hidden",
+                whiteSpace: "nowrap",
+                textOverflow: "ellipsis",
+              }}>{b.title}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div>
+        <div style={{ fontFamily:FONT_DISPLAY, fontSize:22, fontWeight:500, letterSpacing:"-0.02em", lineHeight:1.1, marginBottom:4 }}>{label}</div>
+        <div style={{ fontFamily:FONT_MONO, fontSize:10, color:MUTED, letterSpacing:"0.15em", textTransform:"uppercase" }}>
+          {String(books.length).padStart(2,"0")} {books.length===1?"book":"books"} \u2192
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function MemberShelf({ member, label, books, onBack, onSelectBook }) {
+  return (
+    <div style={{ padding:"32px clamp(16px, 4vw, 48px) 80px", animation:"overlayIn 0.25s ease" }}>
+      <button onClick={onBack}
+        style={{
+          display:"inline-flex", alignItems:"center", gap:6,
+          padding:"8px 14px 8px 10px", background:"transparent",
+          border:"1px solid "+RULE_SOFT, borderRadius:999,
+          fontSize:12, color:INK, cursor:"pointer",
+          fontFamily:FONT_SANS, marginBottom:24,
+        }}>
+        <ChevronLeft size={16} strokeWidth={2} /> All readers
+      </button>
+      <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(36px,5vw,56px)", fontWeight:400, letterSpacing:"-0.035em", lineHeight:1.0, margin:"0 0 6px" }}>
+        {label}\u2019s <em>shelf</em>
+      </h1>
+      <p style={{ fontFamily:FONT_MONO, fontSize:11, color:MUTED, letterSpacing:"0.15em", textTransform:"uppercase", margin:"0 0 40px" }}>
+        {String(books.length).padStart(2,"0")} {books.length===1?"book":"books"}
+      </p>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:3, alignItems:"flex-end" }}>
+        {books.map(function(book, i) {
+          return <Spine key={book.id} book={book} index={i} onSelect={onSelectBook} />;
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ── Spine Grid ─────────────────────────────────────────────────────────────
@@ -1777,7 +1939,7 @@ function SearchLoadingMessages() {
   );
 }
 
-function SearchOverlay({ onClose, onAdd, existingIds }) {
+function SearchOverlay({ onClose, onAdd, onImport, existingIds }) {
   var qArr = useState(""); var query = qArr[0]; var setQuery = qArr[1];
   var resArr = useState([]); var results = resArr[0]; var setResults = resArr[1];
   var searchingArr = useState(false); var searching = searchingArr[0]; var setSearching = searchingArr[1];
@@ -1799,9 +1961,16 @@ function SearchOverlay({ onClose, onAdd, existingIds }) {
 
   return (
     <div style={{ position:"fixed", inset:0, zIndex:200, background:BG, display:"flex", flexDirection:"column", animation:"overlayIn 0.35s ease" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"28px 48px 0" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"28px clamp(16px, 4vw, 48px) 0", gap:12, flexWrap:"wrap" }}>
         <div style={{ fontFamily:FONT_MONO, fontSize:11, color:MUTED, letterSpacing:"0.2em" }}>FIND</div>
-        <button style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 18px", background:"transparent", border:"1px solid "+RULE_SOFT, borderRadius:999, fontSize:13, fontFamily:FONT_SANS, color:INK, cursor:"pointer" }} onClick={onClose}>Close <X size={16} strokeWidth={2} /></button>
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          {onImport && (
+            <button style={{ display:"flex", alignItems:"center", gap:6, padding:"10px 16px", background:"transparent", border:"1px solid "+RULE_SOFT, borderRadius:999, fontSize:12, fontFamily:FONT_SANS, color:INK, cursor:"pointer" }} onClick={onImport}>
+              <Upload size={13} strokeWidth={2} /> Import from Goodreads
+            </button>
+          )}
+          <button style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 18px", background:"transparent", border:"1px solid "+RULE_SOFT, borderRadius:999, fontSize:13, fontFamily:FONT_SANS, color:INK, cursor:"pointer" }} onClick={onClose}>Close <X size={16} strokeWidth={2} /></button>
+        </div>
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:20, padding:"60px 48px 20px" }}>
         <Search size={32} strokeWidth={1.5} style={{ color:"#999", flexShrink:0 }} />
