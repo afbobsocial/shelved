@@ -1598,10 +1598,10 @@ function MyCircleOverlay({ books, currentUser, currentUserId, userMap, onClose, 
       {selectedMember === null ? (
         <div style={{ padding:"40px clamp(16px, 4vw, 48px) 80px" }}>
           <h1 style={{ fontFamily:FONT_DISPLAY, fontSize:"clamp(40px,6vw,72px)", fontWeight:400, letterSpacing:"-0.035em", lineHeight:1.0, margin:"0 0 12px" }}>
-            Everyone\'s <em>shelf</em>.
+            Everyone's <em>shelf</em>.
           </h1>
           <p style={{ fontFamily:FONT_SERIF, fontStyle:"italic", fontSize:17, color:MUTED, margin:"0 0 48px", letterSpacing:"-0.01em" }}>
-            Pick a reader to browse what they\'ve shelved.
+            Pick a reader to browse what they've shelved.
           </p>
 
           {members.length === 0 ? (
