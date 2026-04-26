@@ -2698,6 +2698,14 @@ function BookDetail({ book, currentUser, currentUserId, userMap, siblings, onNav
             {book.year && <div style={{ fontFamily:FONT_MONO, fontSize:11, color:MUTED, letterSpacing:"0.1em" }}>Published {book.year}</div>}
             {book.addedBy && <div style={{ fontFamily:FONT_SERIF, fontSize:13, fontStyle:"italic", color:MUTED, marginTop:8 }}>Added by {book.addedBy}</div>}
             <GenreEditor currentGenre={genreForBook(book)} onChange={async function(g) { await onUpdate(book.id, function(b) { return Object.assign({},b,{genre:g||null}); }); }} />
+            {book.description && (
+              <div style={{ marginTop:24, paddingTop:24, borderTop:"1px solid "+RULE_SOFT }}>
+                <div style={{ fontFamily:FONT_MONO, fontSize:10, color:MUTED, letterSpacing:"0.15em", textTransform:"uppercase", marginBottom:12 }}>About</div>
+                <p style={{ fontFamily:FONT_SERIF, fontSize:15, lineHeight:1.55, color:INK, margin:0, letterSpacing:"-0.005em" }}>
+                  {(book.description || "").replace(/<[^>]+>/g, "").trim()}
+                </p>
+              </div>
+            )}
             {readerList.length > 0 && (
               <div style={{ marginTop:36, paddingTop:24, borderTop:"1px solid "+RULE }}>
                 <div style={{ fontFamily:FONT_MONO, fontSize:10, color:MUTED, letterSpacing:"0.15em", marginBottom:12 }}>THE CIRCLE</div>
