@@ -1563,8 +1563,6 @@ function FannedHand({ books, onSelect }) {
     </div>
   );
 }
-}
-
 
 // ── My Circle overlay ──────────────────────────────────────────────────────
 // Carousel of member cards. Clicking a card expands to show that person's shelf.
