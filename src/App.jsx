@@ -2086,12 +2086,15 @@ function StackBook({ book, rot, xOff, bookH, bookWidth, stagger, onSelect }) {
   var baseTransform = "rotate("+rot+"deg) translateX("+xOff+"px) translateY(0px)";
   var hoverTransform = "rotate("+(rot*0.3)+"deg) translateX("+(xOff*0.5)+"px) translateY(-4px)";
 
-  // Description preview: short blurb (max ~280 chars), no HTML
+  // Description preview: strip HTML tags, max 280 chars
   var blurb = (book.description || "").replace(/<[^>]+>/g, "").trim();
-  var blurbShort = blurb.length > 280 ? blurb.slice(0, 280).trim() + "\u2026" : blurb;
+  var blurbShort = blurb.length > 280 ? blurb.slice(0, 280).trim() + "…" : blurb;
+
+  var w = bookWidth ? Math.min(bookWidth, 900) : null;
+  var wStyle = w ? w+"px" : "min(900px, 90vw)";
 
   return (
-    <div style={{ position:"relative", width: bookWidth ? Math.min(bookWidth, 900) : "min(900px, 90vw)", maxWidth:"95vw", display:"flex", justifyContent:"center" }}
+    <div style={{ position:"relative", width:wStyle, maxWidth:"95vw", display:"flex", justifyContent:"center" }}
          onMouseEnter={function() { setHovered(true); }}
          onMouseLeave={function() { setHovered(false); }}>
       <button
@@ -2111,12 +2114,40 @@ function StackBook({ book, rot, xOff, bookH, bookWidth, stagger, onSelect }) {
         <div style={{ width:4, height:"60%", background:"rgba(255,255,255,0.35)", borderRadius:2, flexShrink:0 }} />
         <div style={{ flex:1, minWidth:0, textAlign:"left" }}>
           <div style={{ fontFamily:FONT_SERIF, fontSize:Math.max(13,bookH*0.30), fontWeight:600, color:"#fff", letterSpacing:"-0.015em", lineHeight:1.1, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{book.title}</div>
-          <div style={{ fontFamily:FONT_MONO, fontSize:Math.max(10,bookH*0.18), color:"rgba(255,255,255,0.75)", letterSpacing:"0.04em", textTransform:"uppercase", marginTop:3, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{book.author}{book.year ? " \u00b7 " + book.year : ""}</div>
-      </div>
-      {genreForBook(book) && bookH > 60 && (
-        <div style={{ fontFamily:FONT_MONO, fontSize:9, color:"rgba(255,255,255,0.6)", letterSpacing:"0.12em", textTransform:"uppercase", flexShrink:0 }}>{genreForBook(book)}</div>
+          <div style={{ fontFamily:FONT_MONO, fontSize:Math.max(10,bookH*0.18), color:"rgba(255,255,255,0.75)", letterSpacing:"0.04em", textTransform:"uppercase", marginTop:3, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{book.author}{book.year ? " · " + book.year : ""}</div>
+        </div>
+        {genreForBook(book) && bookH > 60 && (
+          <div style={{ fontFamily:FONT_MONO, fontSize:9, color:"rgba(255,255,255,0.6)", letterSpacing:"0.12em", textTransform:"uppercase", flexShrink:0 }}>{genreForBook(book)}</div>
+        )}
+        {(book.reviews || []).length > 0 && <div style={{ width:6, height:6, borderRadius:"50%", background:"rgba(255,255,255,0.9)", flexShrink:0 }} />}
+      </button>
+
+      {hovered && blurbShort && (
+        <div style={{
+          position:"absolute",
+          left:"calc(100% + 18px)",
+          top:"50%",
+          transform:"translateY(-50%)",
+          width:280,
+          maxWidth:"70vw",
+          background:INK,
+          color:BG,
+          padding:"14px 16px",
+          borderRadius:6,
+          fontFamily:FONT_SERIF,
+          fontSize:13,
+          lineHeight:1.45,
+          letterSpacing:"-0.005em",
+          boxShadow:"0 12px 28px rgba(0,0,0,0.25)",
+          zIndex:50,
+          pointerEvents:"none",
+          animation:"fadeIn 0.15s ease",
+        }}>
+          <div style={{ position:"absolute", left:-6, top:"50%", transform:"translateY(-50%) rotate(45deg)", width:12, height:12, background:INK, zIndex:-1 }} />
+          {blurbShort}
+        </div>
       )}
-    </button>
+    </div>
   );
 }
 
