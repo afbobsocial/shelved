@@ -1958,11 +1958,49 @@ var Spine = memo(function Spine({ book, index, tilt, onSelect }) {
   var slotMarginRight = doesTilt && tiltDeg > 0 ? 4 : 0;
 
   if (doesTilt) {
+    // Calculate how far the top of the book swings out (for a 340px tall spine at tiltDeg)
+    var swingPx = Math.ceil(340 * Math.sin(Math.abs(tiltDeg) * Math.PI / 180)) + 8;
+    // The slot is wide enough to contain the swung top corner.
+    // Book sits flush to the side it LEANS toward; gap on the other side.
+    var slotW = width + swingPx;
+    // If leaning right (tiltDeg > 0): bottom-left anchored → top swings right → book flush left
+    // If leaning left (tiltDeg < 0): bottom-right anchored → top swings left → book flush right
+    var bookLeft = tiltDeg > 0 ? 0 : swingPx;
+
     return (
-      <div style={{ paddingLeft:slotPaddingLeft, paddingRight:slotPaddingRight, marginLeft:slotMarginLeft, marginRight:slotMarginRight, alignSelf:"flex-end" }}>
+      <div style={{
+        position:"relative",
+        width:slotW+"px",
+        height:340,
+        alignSelf:"flex-end",
+        flexShrink:0,
+        marginLeft:4,
+        marginRight:4,
+      }}>
         <button
           className="spine"
-          style={{ width:width+"px", height:340, background:color, border:"none", padding:0, cursor:"pointer", display:"flex", flexDirection:"column", justifyContent:"space-between", overflow:"hidden", animation:"spineIn 0.6s cubic-bezier(0.2,0.8,0.2,1) both", animationDelay:stagger+"ms", fontFamily:FONT_SANS, position:"relative", transform:transformStyle, transformOrigin:transformOriginStyle }}
+          style={{
+            position:"absolute",
+            left:bookLeft+"px",
+            bottom:0,
+            width:width+"px",
+            height:340,
+            background:color,
+            border:"none",
+            padding:0,
+            cursor:"pointer",
+            display:"flex",
+            flexDirection:"column",
+            justifyContent:"space-between",
+            overflow:"hidden",
+            animation:"spineIn 0.6s cubic-bezier(0.2,0.8,0.2,1) both",
+            animationDelay:stagger+"ms",
+            fontFamily:FONT_SANS,
+            transform: "translateY("+lift+"px) rotate("+tiltDeg+"deg)",
+            transformOrigin: transformOriginStyle,
+            transition:"transform 0.2s ease, box-shadow 0.2s ease",
+            boxShadow: hovered ? "0 18px 40px rgba(0,0,0,0.18)" : "none",
+          }}
           onMouseEnter={function() { setHovered(true); }}
           onMouseLeave={function() { setHovered(false); }}
           onClick={function() { onSelect(book); }}
@@ -2061,7 +2099,7 @@ function StackView({ books, onSelect, onAdd }) {
           var bookH = 56 + (h % 16);
           // Width varies as well so it looks like a real pile (not perfectly aligned)
           var widthPct = 70 + ((hashString((book.id||"")+"w2") % 25)); // 70-94% of max
-          var maxWidth = 560;
+          var maxWidth = Math.round(window.innerWidth * 0.60);
           var bookWidth = Math.round(maxWidth * widthPct / 100);
           var stagger = Math.min(i * 40, 1200);
           return <StackBook key={book.id} book={book} rot={rot} xOff={xOff} bookH={bookH} bookWidth={bookWidth} stagger={stagger} onSelect={onSelect} />;
@@ -2090,8 +2128,8 @@ function StackBook({ book, rot, xOff, bookH, bookWidth, stagger, onSelect }) {
   var blurb = (book.description || "").replace(/<[^>]+>/g, "").trim();
   var blurbShort = blurb.length > 280 ? blurb.slice(0, 280).trim() + "…" : blurb;
 
-  var w = bookWidth ? Math.min(bookWidth, 900) : null;
-  var wStyle = w ? w+"px" : "min(900px, 90vw)";
+  var w = bookWidth || null;
+  var wStyle = w ? w+"px" : "60vw";
 
   return (
     <div style={{ position:"relative", width:wStyle, maxWidth:"95vw", display:"flex", justifyContent:"center" }}
@@ -2379,7 +2417,7 @@ function ImportModal({ onClose, onImport }) {
   }, { read:0, reading:0, want:0, rated:0 });
 
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:100, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
+    <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:400, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
       <div style={{ width:"100%", maxWidth:560, maxHeight:"88vh", background:BG, borderRadius:"4px 4px 0 0", display:"flex", flexDirection:"column", animation:"sheetIn 0.4s ease", boxShadow:"0 -20px 60px rgba(0,0,0,0.2)" }} onClick={function(e) { e.stopPropagation(); }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", padding:"28px 32px 16px", borderBottom:"1px solid "+RULE }}>
           <div>
@@ -2536,7 +2574,7 @@ function RecsModal({ books, currentUser, currentUserId, userMap, favGenres, onCl
   }).length;
   var context = myRatings === 0 ? "Rate a few books and these will get smarter." : "Based on your taste and your circle's ratings.";
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:100, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
+    <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:400, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
       <div style={{ width:"100%", maxWidth:640, maxHeight:"92vh", background:BG, borderRadius:"4px 4px 0 0", display:"flex", flexDirection:"column", animation:"sheetIn 0.4s ease", boxShadow:"0 -20px 60px rgba(0,0,0,0.2)", overflow:"hidden" }} onClick={function(e) { e.stopPropagation(); }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", padding:"32px 32px 20px", borderBottom:"1px solid "+RULE }}>
           <div>
@@ -2583,7 +2621,7 @@ function NameEditModal({ currentName, onClose, onSave }) {
   useEffect(function() { if (ref.current) { ref.current.focus(); ref.current.select(); } }, []);
   var changed = value.trim() && value.trim() !== currentName;
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:100, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
+    <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:400, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
       <div style={{ width:"100%", maxWidth:440, background:BG, borderRadius:"4px 4px 0 0", padding:32, animation:"sheetIn 0.4s ease", boxShadow:"0 -20px 60px rgba(0,0,0,0.2)" }} onClick={function(e) { e.stopPropagation(); }}>
         <div style={{ fontFamily:FONT_MONO, fontSize:11, color:MUTED, letterSpacing:"0.2em" }}>CHANGE NAME</div>
         <h2 style={{ fontFamily:FONT_DISPLAY, fontSize:36, fontWeight:400, margin:"8px 0 8px", letterSpacing:"-0.03em" }}>Who are you?</h2>
@@ -2666,7 +2704,7 @@ function BookDetail({ book, currentUser, currentUserId, userMap, siblings, onNav
   }
 
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:100, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
+    <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:400, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
       <div style={{ width:"100%", maxWidth:960, maxHeight:"92vh", background:BG, borderRadius:"4px 4px 0 0", position:"relative", overflow:"hidden", display:"flex", flexDirection:"column", animation:"sheetIn 0.4s ease", boxShadow:"0 -20px 60px rgba(0,0,0,0.2)" }} onClick={function(e) { e.stopPropagation(); }}>
         <div style={{ position:"absolute", top:20, right:20, zIndex:2, display:"flex", gap:8 }}>
           <button className="detailIconBtn" style={{ display:"flex", alignItems:"center", gap:6, height:36, padding:"0 14px", borderRadius:999, border:"1px solid "+RULE_SOFT, background:BG, cursor:"pointer", fontFamily:FONT_SANS, fontSize:12 }} onClick={shareBook}>
