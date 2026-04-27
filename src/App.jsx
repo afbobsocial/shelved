@@ -2715,7 +2715,7 @@ function BookDetail({ book, currentUser, currentUserId, userMap, siblings, onNav
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:400, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
-      <div style={{ width:"100%", maxWidth:960, maxHeight:"92vh", maxWidth:"100vw", background:BG, borderRadius:"4px 4px 0 0", position:"relative", overflow:"hidden", display:"flex", flexDirection:"column", animation:"sheetIn 0.4s ease", boxShadow:"0 -20px 60px rgba(0,0,0,0.2)" }} onClick={function(e) { e.stopPropagation(); }}>
+      <div style={{ width:"70vw", maxWidth:960, maxHeight:"92vh", background:BG, borderRadius:"4px 4px 0 0", position:"relative", overflow:"hidden", display:"flex", flexDirection:"column", animation:"sheetIn 0.4s ease", boxShadow:"0 -20px 60px rgba(0,0,0,0.2)" }} onClick={function(e) { e.stopPropagation(); }}>
         <div style={{ position:"absolute", top:20, right:20, zIndex:2, display:"flex", gap:8 }}>
           <button className="detailIconBtn" style={{ display:"flex", alignItems:"center", gap:6, height:36, padding:"0 14px", borderRadius:999, border:"1px solid "+RULE_SOFT, background:BG, cursor:"pointer", fontFamily:FONT_SANS, fontSize:12 }} onClick={shareBook}>
             {shareStatus==="copied" ? <Check size={16} strokeWidth={2.2} /> : <Link2 size={16} strokeWidth={2} />}
