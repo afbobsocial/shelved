@@ -1387,12 +1387,12 @@ function Header({ user, bookCount, untaggedCount, pulseForYou, onAdd, onCircle, 
             <button className="nameBtn" style={{ background:"transparent", border:"none", padding:0, color:MUTED, fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.08em", textTransform:"uppercase", cursor:"pointer", borderBottom:"1px dotted "+MUTED }} onClick={onEditName}>{user}</button>
           </span>
         </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-          <button style={{ display:"flex", alignItems:"center", gap:6, padding:"10px 16px", background:"transparent", color:INK, border:"1px solid "+RULE, borderRadius:999, fontSize:13, fontWeight:500, cursor:"pointer", fontFamily:FONT_SANS }} onClick={onCircle}>
-            <Users size={14} strokeWidth={2} /> My Circle
+        <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap", justifyContent:"flex-end" }}>
+          <button className="headerBtn" style={{ display:"flex", alignItems:"center", gap:6, padding:"10px 16px", background:"transparent", color:INK, border:"1px solid "+RULE, borderRadius:999, fontSize:13, fontWeight:500, cursor:"pointer", fontFamily:FONT_SANS }} onClick={onCircle}>
+            <Users size={14} strokeWidth={2} /><span className="headerBtnLabel"> My Circle</span>
           </button>
-          <button style={{ display:"flex", alignItems:"center", gap:6, padding:"10px 18px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:13, fontWeight:500, cursor:"pointer", fontFamily:FONT_SANS }} onClick={onAdd}>
-            <Plus size={14} strokeWidth={2.5} /> Add a book
+          <button className="headerBtn" style={{ display:"flex", alignItems:"center", gap:6, padding:"10px 18px", background:INK, color:BG, border:"none", borderRadius:999, fontSize:13, fontWeight:500, cursor:"pointer", fontFamily:FONT_SANS }} onClick={onAdd}>
+            <Plus size={14} strokeWidth={2.5} /><span className="headerBtnLabel"> Add a book</span>
           </button>
         </div>
       </div>
@@ -1440,7 +1440,7 @@ function FilterBar({ filter, setFilter, view, setView, counts, genreFilter, setG
 
   return (
     <div style={{ borderBottom:"1px solid "+RULE, position:"relative", zIndex:50 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"16px clamp(16px, 4vw, 48px) 10px", gap:16, flexWrap:"nowrap" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"16px clamp(16px, 4vw, 48px) 10px", gap:16, flexWrap:"wrap" }}>
         <div className="chipScroll" style={{ display:"flex", gap:4, alignItems:"center", overflowX:"auto", flex:1, minWidth:0 }}>
           {filters.map(function(f) {
             var active = filter === f.k;
@@ -1957,6 +1957,13 @@ var Spine = memo(function Spine({ book, index, tilt, onSelect }) {
   var slotMarginLeft = doesTilt && tiltDeg < 0 ? 4 : 0;
   var slotMarginRight = doesTilt && tiltDeg > 0 ? 4 : 0;
 
+  // On mobile, skip tilt entirely — tiny 64px spines can't absorb the gap space.
+  if (doesTilt && window.innerWidth < 600) {
+    doesTilt = false; tiltDeg = 0;
+    transformStyle = "translateY(" + lift + "px)";
+    transformOriginStyle = "bottom center";
+  }
+
   if (doesTilt) {
     // Calculate how far the top of the book swings out (for a 340px tall spine at tiltDeg)
     var swingPx = Math.ceil(340 * Math.sin(Math.abs(tiltDeg) * Math.PI / 180)) + 8;
@@ -2088,18 +2095,21 @@ function StackView({ books, onSelect, onAdd }) {
           {toast}
         </div>
       )}
-      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", padding:"60px clamp(16px, 4vw, 48px) 100px", gap:1, overflowX:"visible", animation:trembling?"stackTremble 0.65s ease":"none" }}>
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", padding:"60px clamp(16px, 4vw, 48px) 100px", gap:1, overflowX:"hidden", animation:trembling?"stackTremble 0.65s ease":"none" }}>
         {books.map(function(book, i) {
           var h = hashString(book.id || book.title);
-          // top book is always tilted slightly; others gradually less rotated towards bottom
+          var vw = window.innerWidth;
+          var isMobile = vw < 600;
           var isTop = i === 0;
-          var rot = isTop ? ((h % 11) - 5) * 0.9 : ((h % 7) - 3) * 0.35;
-          var xOff = isTop ? ((hashString((book.id||"")+"x") % 24) - 12) : ((hashString((book.id||"")+"x") % 16) - 8);
-          // Thicker books: 56-72px, varied so the stack looks natural
+          // Tighten rotation and offset on mobile to avoid overflow
+          var rotScale = isMobile ? 0.4 : 1;
+          var rot = isTop ? ((h % 11) - 5) * 0.9 * rotScale : ((h % 7) - 3) * 0.35 * rotScale;
+          var xOffMax = isMobile ? 6 : (isTop ? 12 : 8);
+          var xOff = ((hashString((book.id||"")+"x") % (xOffMax*2)) - xOffMax);
           var bookH = 56 + (h % 16);
-          // Width varies as well so it looks like a real pile (not perfectly aligned)
-          var widthPct = 70 + ((hashString((book.id||"")+"w2") % 25)); // 70-94% of max
-          var maxWidth = Math.round(window.innerWidth * 0.60);
+          var widthPct = 70 + ((hashString((book.id||"")+"w2") % 25));
+          // On mobile use 88vw base; on desktop 60vw
+          var maxWidth = Math.round(vw * (isMobile ? 0.88 : 0.60));
           var bookWidth = Math.round(maxWidth * widthPct / 100);
           var stagger = Math.min(i * 40, 1200);
           return <StackBook key={book.id} book={book} rot={rot} xOff={xOff} bookH={bookH} bookWidth={bookWidth} stagger={stagger} onSelect={onSelect} />;
@@ -2161,7 +2171,7 @@ function StackBook({ book, rot, xOff, bookH, bookWidth, stagger, onSelect }) {
       </button>
 
       {hovered && blurbShort && (
-        <div style={{
+        <div className="stackTooltip" style={{
           position:"absolute",
           left:"calc(100% + 18px)",
           top:"50%",
@@ -2705,7 +2715,7 @@ function BookDetail({ book, currentUser, currentUserId, userMap, siblings, onNav
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(14,14,14,0.35)", backdropFilter:"blur(8px)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:400, animation:"fadeIn 0.25s ease" }} onClick={onClose}>
-      <div style={{ width:"100%", maxWidth:960, maxHeight:"92vh", background:BG, borderRadius:"4px 4px 0 0", position:"relative", overflow:"hidden", display:"flex", flexDirection:"column", animation:"sheetIn 0.4s ease", boxShadow:"0 -20px 60px rgba(0,0,0,0.2)" }} onClick={function(e) { e.stopPropagation(); }}>
+      <div style={{ width:"100%", maxWidth:960, maxHeight:"92vh", maxWidth:"100vw", background:BG, borderRadius:"4px 4px 0 0", position:"relative", overflow:"hidden", display:"flex", flexDirection:"column", animation:"sheetIn 0.4s ease", boxShadow:"0 -20px 60px rgba(0,0,0,0.2)" }} onClick={function(e) { e.stopPropagation(); }}>
         <div style={{ position:"absolute", top:20, right:20, zIndex:2, display:"flex", gap:8 }}>
           <button className="detailIconBtn" style={{ display:"flex", alignItems:"center", gap:6, height:36, padding:"0 14px", borderRadius:999, border:"1px solid "+RULE_SOFT, background:BG, cursor:"pointer", fontFamily:FONT_SANS, fontSize:12 }} onClick={shareBook}>
             {shareStatus==="copied" ? <Check size={16} strokeWidth={2.2} /> : <Link2 size={16} strokeWidth={2} />}
@@ -2838,4 +2848,4 @@ function BookDetail({ book, currentUser, currentUserId, userMap, siblings, onNav
 
 // ── Global CSS ─────────────────────────────────────────────────────────────
 
-var GLOBAL_CSS = "@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..600&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');\n* { box-sizing: border-box; }\nbody { margin: 0; -webkit-font-smoothing: antialiased; }\n@keyframes fadeIn { from { opacity:0; } to { opacity:1; } }\n@keyframes spineIn { from { opacity:0; } to { opacity:1; } }\n@keyframes stackSlideIn { from { opacity:0; transform:translateY(32px); } to { opacity:1; } }\n@keyframes stackTremble { 0%,100% { transform:translateX(0); } 10% { transform:translateX(-4px) rotate(-0.6deg); } 20% { transform:translateX(4px) rotate(0.6deg); } 35% { transform:translateX(-3px) rotate(-0.4deg); } 50% { transform:translateX(3px) rotate(0.4deg); } 65% { transform:translateX(-2px); } 80% { transform:translateX(2px); } }\n@keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(12px) scale(0.93); } to { opacity:1; transform:translateX(-50%) translateY(0) scale(1); } }\n@keyframes resultIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }\n@keyframes laneIn { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }\n@keyframes overlayIn { from { opacity:0; } to { opacity:1; } }\n@keyframes sheetIn { from { transform:translateY(100%); } to { transform:translateY(0); } }\n@keyframes dropdownIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }\n@keyframes dotBounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }\n.spin { animation:spin 1s linear infinite; }\n@keyframes spin { to { transform:rotate(360deg); } }\n.blob { position:absolute; border-radius:50%; filter:blur(80px); opacity:0.5; }\n.blob-1 { width:620px; height:620px; background:radial-gradient(circle,#E63946 0%,transparent 70%); top:-10%; left:-10%; animation:drift1 32s ease-in-out infinite; }\n.blob-2 { width:540px; height:540px; background:radial-gradient(circle,#3A86FF 0%,transparent 70%); top:40%; right:-8%; animation:drift2 38s ease-in-out infinite; }\n.blob-3 { width:480px; height:480px; background:radial-gradient(circle,#FCBF49 0%,transparent 70%); bottom:-5%; left:30%; animation:drift3 44s ease-in-out infinite; }\n.blob-4 { width:420px; height:420px; background:radial-gradient(circle,#06A77D 0%,transparent 70%); top:20%; left:45%; animation:drift4 50s ease-in-out infinite; opacity:0.35; }\n@keyframes drift1 { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(80px,60px) scale(1.15);} 66%{transform:translate(40px,120px) scale(0.9);} }\n@keyframes drift2 { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(-70px,80px) scale(0.85);} 66%{transform:translate(-120px,-40px) scale(1.1);} }\n@keyframes drift3 { 0%,100%{transform:translate(0,0) scale(1);} 50%{transform:translate(100px,-80px) scale(1.2);} }\n@keyframes drift4 { 0%,100%{transform:translate(0,0) scale(1);} 25%{transform:translate(-60px,40px) scale(1.1);} 75%{transform:translate(80px,-50px) scale(1.05);} }\n.spine:hover { box-shadow:0 18px 40px rgba(0,0,0,0.18) !important; z-index:2; } .spine { transition: transform 0.2s ease, box-shadow 0.2s ease; }.spine-picking { animation:spinePick 0.34s cubic-bezier(0.15,0,0.6,1) both !important; transform-origin:bottom center; }@keyframes spinePick { 0%{transform:translateY(0) rotateY(0deg) scale(1);} 35%{transform:translateY(-22px) rotateY(12deg) scale(1.04);} 65%{transform:translateY(-32px) rotateY(-6deg) scale(1.07);} 100%{transform:translateY(-28px) rotateY(0deg) scale(1.06);} }\n.add-spine:hover { border-color:#0E0E0E !important; color:#0E0E0E !important; }\n.searchPrompt:hover { background:#0E0E0E !important; color:#F5F1EA !important; }\n.recCard:hover { background:#F5F1EA !important; border-color:#0E0E0E !important; transform:translateY(-2px); }\n.nameBtn:hover { color:#E63946 !important; border-color:#E63946 !important; }\n.detailIconBtn:hover { background:#0E0E0E !important; color:#F5F1EA !important; }\n.reviewItem:hover .reviewItemDelete { opacity:1 !important; }\n::-webkit-scrollbar { width:10px; } ::-webkit-scrollbar-track { background:transparent; } ::-webkit-scrollbar-thumb { background:rgba(14,14,14,0.15); border-radius:5px; }\nbutton:focus-visible,input:focus-visible,textarea:focus-visible { outline:2px solid #0E0E0E; outline-offset:2px; }\n::selection { background:#E63946; color:#F5F1EA; }\n@media (max-width:820px) { [style*='grid-template-columns: 280px'] { grid-template-columns:1fr !important; } } .chipScroll::-webkit-scrollbar { display: none; } .chipScroll { -ms-overflow-style: none; scrollbar-width: none; } @keyframes forYouPulse { 0%,100% { box-shadow:0 3px 12px rgba(230,57,70,0.28); transform:scale(1); } 50% { box-shadow:0 6px 24px rgba(230,57,70,0.55); transform:scale(1.035); } } .forYouPulse { animation: forYouPulse 2.2s cubic-bezier(0.4,0,0.6,1) infinite; } @media (max-width:600px) { .stackTooltip { display:none !important; } .spine { width: 64px !important; height: 260px !important; } .add-spine { width: 64px !important; height: 260px !important; } .forYouPulse { animation: none; } .detailChevron { display:none !important; } } .detailChevron:hover { background:#0E0E0E !important; } .detailChevron:hover svg path { stroke:#F5F1EA !important; }";
+var GLOBAL_CSS = "@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..600&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');\n* { box-sizing: border-box; }\nbody { margin: 0; -webkit-font-smoothing: antialiased; }\n@keyframes fadeIn { from { opacity:0; } to { opacity:1; } }\n@keyframes spineIn { from { opacity:0; } to { opacity:1; } }\n@keyframes stackSlideIn { from { opacity:0; transform:translateY(32px); } to { opacity:1; } }\n@keyframes stackTremble { 0%,100% { transform:translateX(0); } 10% { transform:translateX(-4px) rotate(-0.6deg); } 20% { transform:translateX(4px) rotate(0.6deg); } 35% { transform:translateX(-3px) rotate(-0.4deg); } 50% { transform:translateX(3px) rotate(0.4deg); } 65% { transform:translateX(-2px); } 80% { transform:translateX(2px); } }\n@keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(12px) scale(0.93); } to { opacity:1; transform:translateX(-50%) translateY(0) scale(1); } }\n@keyframes resultIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }\n@keyframes laneIn { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }\n@keyframes overlayIn { from { opacity:0; } to { opacity:1; } }\n@keyframes sheetIn { from { transform:translateY(100%); } to { transform:translateY(0); } }\n@keyframes dropdownIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }\n@keyframes dotBounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }\n.spin { animation:spin 1s linear infinite; }\n@keyframes spin { to { transform:rotate(360deg); } }\n.blob { position:absolute; border-radius:50%; filter:blur(80px); opacity:0.5; }\n.blob-1 { width:620px; height:620px; background:radial-gradient(circle,#E63946 0%,transparent 70%); top:-10%; left:-10%; animation:drift1 32s ease-in-out infinite; }\n.blob-2 { width:540px; height:540px; background:radial-gradient(circle,#3A86FF 0%,transparent 70%); top:40%; right:-8%; animation:drift2 38s ease-in-out infinite; }\n.blob-3 { width:480px; height:480px; background:radial-gradient(circle,#FCBF49 0%,transparent 70%); bottom:-5%; left:30%; animation:drift3 44s ease-in-out infinite; }\n.blob-4 { width:420px; height:420px; background:radial-gradient(circle,#06A77D 0%,transparent 70%); top:20%; left:45%; animation:drift4 50s ease-in-out infinite; opacity:0.35; }\n@keyframes drift1 { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(80px,60px) scale(1.15);} 66%{transform:translate(40px,120px) scale(0.9);} }\n@keyframes drift2 { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(-70px,80px) scale(0.85);} 66%{transform:translate(-120px,-40px) scale(1.1);} }\n@keyframes drift3 { 0%,100%{transform:translate(0,0) scale(1);} 50%{transform:translate(100px,-80px) scale(1.2);} }\n@keyframes drift4 { 0%,100%{transform:translate(0,0) scale(1);} 25%{transform:translate(-60px,40px) scale(1.1);} 75%{transform:translate(80px,-50px) scale(1.05);} }\n.spine:hover { box-shadow:0 18px 40px rgba(0,0,0,0.18) !important; z-index:2; } .spine { transition: transform 0.2s ease, box-shadow 0.2s ease; }.spine-picking { animation:spinePick 0.34s cubic-bezier(0.15,0,0.6,1) both !important; transform-origin:bottom center; }@keyframes spinePick { 0%{transform:translateY(0) rotateY(0deg) scale(1);} 35%{transform:translateY(-22px) rotateY(12deg) scale(1.04);} 65%{transform:translateY(-32px) rotateY(-6deg) scale(1.07);} 100%{transform:translateY(-28px) rotateY(0deg) scale(1.06);} }\n.add-spine:hover { border-color:#0E0E0E !important; color:#0E0E0E !important; }\n.searchPrompt:hover { background:#0E0E0E !important; color:#F5F1EA !important; }\n.recCard:hover { background:#F5F1EA !important; border-color:#0E0E0E !important; transform:translateY(-2px); }\n.nameBtn:hover { color:#E63946 !important; border-color:#E63946 !important; }\n.detailIconBtn:hover { background:#0E0E0E !important; color:#F5F1EA !important; }\n.reviewItem:hover .reviewItemDelete { opacity:1 !important; }\n::-webkit-scrollbar { width:10px; } ::-webkit-scrollbar-track { background:transparent; } ::-webkit-scrollbar-thumb { background:rgba(14,14,14,0.15); border-radius:5px; }\nbutton:focus-visible,input:focus-visible,textarea:focus-visible { outline:2px solid #0E0E0E; outline-offset:2px; }\n::selection { background:#E63946; color:#F5F1EA; }\n@media (max-width:820px) { [style*='grid-template-columns: 280px'] { grid-template-columns:1fr !important; } } .chipScroll::-webkit-scrollbar { display: none; } .chipScroll { -ms-overflow-style: none; scrollbar-width: none; } @keyframes forYouPulse { 0%,100% { box-shadow:0 3px 12px rgba(230,57,70,0.28); transform:scale(1); } 50% { box-shadow:0 6px 24px rgba(230,57,70,0.55); transform:scale(1.035); } } .forYouPulse { animation: forYouPulse 2.2s cubic-bezier(0.4,0,0.6,1) infinite; } @media (max-width:600px) { .stackTooltip { display:none !important; } .spine { width: 64px !important; height: 260px !important; } .add-spine { width: 64px !important; height: 260px !important; } .forYouPulse { animation: none; } .detailChevron { display:none !important; } .headerBtnLabel { display:none; } } @media (max-width:768px) { .stackTooltip { display:none !important; } } @media (min-width:601px) { .headerBtnLabel { display:inline; } } .detailChevron:hover { background:#0E0E0E !important; } .detailChevron:hover svg path { stroke:#F5F1EA !important; }";
